@@ -1,0 +1,330 @@
+import { TrendingUp, TrendingDown, Minus, Eye, Heart, Zap } from 'lucide-react';
+import { clsx } from 'clsx';
+import { useDiffStore } from '../../store/useDiffStore';
+import type { NodeDiff, DiffSeverity, EmotionProfile } from '../../types';
+
+const severityStyle: Record<DiffSeverity, { label: string; color: string; bg: string; border: string; }> = {
+  low: { label: '低', color: 'text-ghost-700', bg: 'bg-abyss-700/50', border: 'border-abyss-600/60' },
+  medium: { label: '中', color: 'text-amber-400', bg: 'bg-amber-900/30', border: 'border-amber-700/50' },
+  high: { label: '高', color: 'text-blood-400', bg: 'bg-blood-900/30', border: 'border-blood-700/60' },
+  critical: { label: '严重', color: 'text-blood-300', bg: 'bg-blood-800/50', border: 'border-blood-500/70 animate-pulse-slow' },
+};
+
+function formatValue(v: any): string {
+  if (v === null || v === undefined) return '—';
+  if (typeof v === 'object') return JSON.stringify(v, null, 0);
+  return String(v);
+}
+
+function EmotionBar({ label, oldV, newV, color, min = 0, max = 100 }: { label: string; oldV: number; newV: number; color: string; min?: number; max?: number; }) {
+  const delta = newV - oldV;
+  const Icon = delta === 0 ? Minus : delta > 0 ? TrendingUp : TrendingDown;
+  const deltaColor = delta === 0 ? 'text-ghost-900' : delta > 0 ? 'text-blood-400' : 'text-moss-500';
+  const oldPct = ((oldV - min) / (max - min)) * 100;
+  const newPct = ((newV - min) / (max - min)) * 100;
+
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center justify-between">
+        <span className="text-[11px] font-medium tracking-wider" style={{ color }}>{label}</span>
+        <div className="flex items-center gap-1 text-[10px] font-mono">
+          <span className="text-ghost-900">{oldV}</span>
+          <span className="text-ghost-900">→</span>
+          <span className="text-ghost-500">{newV}</span>
+          {delta !== 0 && (
+            <span className={clsx('flex items-center gap-0.5', deltaColor)}>
+              <Icon className="w-2.5 h-2.5" />
+              {delta > 0 ? '+' : ''}
+              {delta}
+            </span>
+          )}
+        </div>
+      </div>
+      <div className="relative h-2 bg-abyss-900/80 rounded-full overflow-hidden border border-abyss-700/60">
+        <div
+          className="absolute inset-y-0 left-0 opacity-50"
+          style={{
+            width: `${oldPct}%`,
+            background: `linear-gradient(90deg, ${color}40, ${color}70`,
+          }}
+        />
+        <div
+          className="absolute inset-y-0 left-0"
+          style={{
+            clipPath: `polygon(${Math.max(0, oldPct - 0.5)}% 0, ${newPct}% 0, ${newPct}% 100%, ${Math.max(0, oldPct - 0.5)}% 100%)`,
+            background: delta >= 0
+              ? 'linear-gradient(90deg, rgba(196, 30, 30, 0.4), rgba(196, 30, 30, 0.8))'
+              : 'linear-gradient(90deg, rgba(94, 138, 74, 0.4), rgba(94, 138, 74, 0.8))',
+          }}
+        />
+        <div className="absolute top-0 bottom-0 border-r border-dashed border-ghost-300/50" style={{ left: `${newPct}%` }} />
+      </div>
+    </div>
+  );
+}
+
+export function DiffViewer() {
+  const { diffReport, selectedDiffIndex, setSelectedDiffIndex } = useDiffStore();
+  if (!diffReport) {
+    return (
+      <div className="flex-1 flex items-center justify-center">
+        <div className="text-center">
+          <div className="text-5xl mb-4 opacity-20 animate-float">🩸</div>
+          <p className="text-ghost-900 font-serif tracking-wider text-sm">请选择两个版本以生成差异报告…</p>
+        </div>
+      </div>
+    );
+  }
+
+  const { nodeDiffs, summary, oldVersion, newVersion } = diffReport;
+
+  return (
+    <div className="flex-1 min-h-0 flex flex-col">
+      <div className="border-b border-abyss-700/60 p-4">
+        <div className="grid grid-cols-3 gap-6">
+          <DiffColumn
+            title="玩家可见信息差异"
+            icon={Eye}
+            accent="#c9a227"
+            diffs={nodeDiffs.filter((d) => d.diffType === 'visible_info' || d.diffType === 'text')}
+            selected={selectedDiffIndex}
+            onSelect={setSelectedDiffIndex}
+            allDiffs={nodeDiffs}
+          />
+          <DiffColumn
+            title="角色态度与情绪"
+            icon={Heart}
+            accent="#c41e1e"
+            diffs={nodeDiffs.filter((d) => d.diffType === 'emotion' || d.diffType === 'choice')}
+            selected={selectedDiffIndex}
+            onSelect={setSelectedDiffIndex}
+            allDiffs={nodeDiffs}
+            headerExtra={
+              <div className="mt-3 space-y-2 border-t border-abyss-700/50 pt-3">
+              <p className="text-[10px] text-ghost-900 tracking-widest uppercase mb-2">全章节情绪曲线变化</p>
+                <EmotionBar label="恐惧 Fear" oldV={avgEmotion(oldVersion.nodes, 'fear')} newV={avgEmotion(newVersion.nodes, 'fear')} color="#c41e1e" />
+                <EmotionBar label="紧张 Tension" oldV={avgEmotion(oldVersion.nodes, 'tension')} newV={avgEmotion(newVersion.nodes, 'tension')} color="#c9a227" />
+                <EmotionBar label="信任 Trust" oldV={avgEmotion(oldVersion.nodes, 'trust')} newV={avgEmotion(newVersion.nodes, 'trust')} min={-50} max={50} color="#3a7ca5" />
+                <EmotionBar label="希望 Hope" oldV={avgEmotion(oldVersion.nodes, 'hope')} newV={avgEmotion(newVersion.nodes, 'hope')} color="#5e8a4a" />
+              </div>
+            }
+          />
+          <DiffColumn
+            title="恐惧强度 / 剧情强度"
+            icon={Zap}
+            accent="#6b0000"
+            diffs={nodeDiffs.filter((d) => d.severity === 'high' || d.severity === 'critical')}
+            selected={selectedDiffIndex}
+            onSelect={setSelectedDiffIndex}
+            allDiffs={nodeDiffs}
+            headerExtra={
+              <div className="mt-3 border-t border-abyss-700/50 pt-3">
+                <FearCurve oldNodes={oldVersion.nodes} newNodes={newVersion.nodes} />
+              </div>
+            }
+          />
+        </div>
+
+        <div className="mt-4 flex items-center gap-4 text-[10px] border-t border-abyss-700/40 pt-3">
+          <div className="flex items-center gap-1.5">
+            <span className="text-ghost-900">变更总数：</span>
+            <span className="font-serif text-lg text-ghost-500">{summary.totalChanges}</span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <span className="text-ghost-900">高风险项：</span>
+            <span className="font-serif text-lg text-blood-400">{summary.highRiskCount}</span>
+          </div>
+          <div className="ml-auto flex gap-2">
+            <button className="gothic-btn !py-1 !px-3 !text-xs">导出报告</button>
+            <button className="gothic-btn-amber !py-1 !px-3 !text-xs">存为草稿</button>
+            <button className="gothic-btn-primary !py-1 !px-4 !text-xs">✓ 审核通过并发布</button>
+          </div>
+        </div>
+      </div>
+
+      <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin p-4">
+        <h3 className="section-title flex items-center gap-2">
+          <span>所有变更列表</span>
+          <span className="text-[10px] text-ghost-900 font-sans font-normal normal-case tracking-normal ml-1">
+            （{nodeDiffs.length} 项）
+          </span>
+        </h3>
+        <div className="space-y-2">
+          {nodeDiffs.map((diff, idx) => (
+            <DiffRow key={diff.nodeId + diff.field} diff={diff} index={idx} isSelected={selectedDiffIndex === idx} onClick={() => setSelectedDiffIndex(idx)} />
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function avgEmotion(nodes: any[], key: keyof EmotionProfile) {
+  if (!nodes.length) return 0;
+  return Math.round(nodes.reduce((s, n) => s + (n.emotion?.[key] ?? 0), 0) / nodes.length);
+}
+
+function FearCurve({ oldNodes, newNodes }: { oldNodes: any[]; newNodes: any[] }) {
+  const w = 260;
+  const h = 60;
+  const dataToPath = (arr: number[]) => {
+    if (!arr.length) return '';
+    const step = w / (arr.length - 1 || 1);
+    return arr
+      .map((v, i) => {
+        const x = i * step;
+        const y = h - (v / 100) * h;
+        return `${i === 0 ? 'M' : 'L'} ${x.toFixed(1)} ${y.toFixed(1)}`;
+      })
+      .join(' ');
+  };
+  const oldArr = oldNodes.map((n) => n.emotion?.fear ?? 50);
+  const newArr = newNodes.map((n) => n.emotion?.fear ?? 50);
+
+  return (
+    <div>
+      <p className="text-[9px] text-ghost-900 mb-1 tracking-wider uppercase">恐惧曲线对比
+
+      </p>
+      <svg width="100%" viewBox={`0 0 ${w} ${h}`} className="overflow-visible">
+        <defs>
+          <linearGradient id="fear-old" x1="0" x2="0" y1="0" y2="1">
+            <stop offset="0%" stopColor="#6b0000" stopOpacity="0.35" />
+            <stop offset="100%" stopColor="#6b0000" stopOpacity="0" />
+          </linearGradient>
+          <linearGradient id="fear-new" x1="0" x2="0" y1="0" y2="1">
+            <stop offset="0%" stopColor="#c41e1e" stopOpacity="0.45" />
+            <stop offset="100%" stopColor="#c41e1e" stopOpacity="0" />
+          </linearGradient>
+        </defs>
+        {[0, 25, 50, 75, 100].map((v) => (
+          <line
+            key={v}
+            x1={0}
+            x2={w}
+            y1={h - (v / 100) * h}
+            y2={h - (v / 100) * h}
+            stroke="#25253a"
+            strokeDasharray="2 3"
+            strokeWidth={0.5}
+          />
+        ))}
+        <path d={`${dataToPath(oldArr)} L ${w} ${h} L 0 ${h} Z`} fill="url(#fear-old)" />
+        <path d={`${dataToPath(newArr)} L ${w} ${h} L 0 ${h} Z`} fill="url(#fear-new)" />
+        <path d={dataToPath(oldArr)} fill="none" stroke="#6b0000" strokeWidth={1.2} strokeDasharray="3 3" />
+        <path d={dataToPath(newArr)} fill="none" stroke="#c41e1e" strokeWidth={1.8} />
+      </svg>
+      <div className="flex gap-3 mt-1 text-[9px]">
+        <span className="flex items-center gap-1"><span className="w-3 h-0.5 border-t-2 border-dashed border-blood-800 inline-block" /><span className="text-ghost-900">旧版</span></span>
+        <span className="flex items-center gap-1"><span className="w-3 h-0.5 bg-blood-500 inline-block" /><span className="text-ghost-700">新版</span></span>
+      </div>
+    </div>
+  );
+}
+
+interface ColProps {
+  title: string;
+  icon: typeof Eye;
+  accent: string;
+  diffs: NodeDiff[];
+  allDiffs: NodeDiff[];
+  selected: number | null;
+  onSelect: (i: number | null) => void;
+  headerExtra?: React.ReactNode;
+}
+
+function DiffColumn({ title, icon: Icon, accent, diffs, headerExtra }: ColProps) {
+  return (
+    <div className="gothic-card p-3 min-h-[160px]">
+      <div className="flex items-center gap-2 mb-2">
+        <Icon className="w-4 h-4" style={{ color: accent }} />
+        <span className="text-xs font-semibold tracking-wider" style={{ color: accent }}>
+          {title}
+        </span>
+        <span className="ml-auto text-[10px] text-ghost-900 font-mono">
+          {diffs.length} 项
+        </span>
+      </div>
+      <div className="space-y-1.5">
+        {diffs.slice(0, 3).map((d) => {
+          const sev = severityStyle[d.severity];
+          return (
+            <div key={d.nodeId + d.field} className={clsx('p-2 rounded-sm border text-[10px]', sev.bg, sev.border)}>
+              <div className="flex items-center gap-1.5 mb-1">
+                <span className={clsx('px-1 rounded-sm font-semibold tracking-wider', sev.color, sev.bg, sev.border, 'border text-[9px]')}>
+                  {sev.label}
+                </span>
+                <span className="font-mono text-ghost-900">{d.nodeId}</span>
+                {d.suspenseRisk && (
+                  <span className="ml-auto text-blood-400 animate-pulse-slow">⚠悬念</span>
+                )}
+              </div>
+              <div className="space-y-0.5 leading-relaxed">
+                <div className="line-through text-ghost-900/80">
+                  <span className="text-blood-700 mr-1">−</span>
+                  {formatValue(d.oldValue).slice(0, 60)}
+                </div>
+                <div className="text-ghost-500">
+                  <span className="text-moss-500 mr-1">+</span>
+                  {formatValue(d.newValue).slice(0, 60)}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+        {diffs.length === 0 && <div className="text-center py-4 text-[10px] text-ghost-900">无相关变更</div>}
+      </div>
+      {headerExtra}
+    </div>
+  );
+}
+
+interface RowProps {
+  diff: NodeDiff;
+  index: number;
+  isSelected: boolean;
+  onClick: () => void;
+}
+
+function DiffRow({ diff, isSelected, onClick }: RowProps) {
+  const sev = severityStyle[diff.severity];
+  return (
+    <div
+      onClick={onClick}
+      className={clsx(
+        'gothic-card p-3 cursor-pointer transition-all duration-200',
+        isSelected && 'border-blood-600/70 shadow-glow-red'
+      )}
+    >
+      <div className="flex items-start gap-3">
+        <div className="flex flex-col items-center gap-1 pt-0.5">
+          <span className={clsx('px-2 py-0.5 text-[9px] font-bold tracking-wider rounded-sm border', sev.color, sev.bg, sev.border)}>
+            {sev.label}风险
+          </span>
+          <span className="font-mono text-[9px] text-ghost-900">{diff.nodeId}</span>
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 mb-1.5">
+            <span className="text-xs font-medium text-ghost-500">{diff.description}</span>
+            <span className="text-[9px] text-ghost-900 font-mono">字段: {diff.field}</span>
+            {diff.suspenseRisk && (
+              <span className="ml-auto px-1.5 py-0.5 rounded-sm bg-blood-900/50 border border-blood-700/60 text-blood-300 text-[9px] font-semibold animate-pulse-slow flex items-center gap-1">
+                <span>⚠</span> 悬念风险
+              </span>
+            )}
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div className="p-2 rounded-sm bg-blood-900/15 border border-blood-800/30">
+              <p className="text-[9px] text-blood-500 tracking-wider mb-1 uppercase">旧版 (删除)</p>
+              <p className="text-xs line-through text-ghost-900/80 leading-relaxed">{formatValue(diff.oldValue)}</p>
+            </div>
+            <div className="p-2 rounded-sm bg-moss-800/20 border border-moss-700/40">
+              <p className="text-[9px] text-moss-500 tracking-wider mb-1 uppercase">新版 (新增)</p>
+              <p className="text-xs text-ghost-500 leading-relaxed">{formatValue(diff.newValue)}</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
