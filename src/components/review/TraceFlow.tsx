@@ -1,7 +1,9 @@
-import { ArrowRight, MessageSquareText, ListTodo, GitBranch, Rocket } from 'lucide-react';
+import { useState } from 'react';
+import { ArrowRight, MessageSquareText, ListTodo, GitBranch, Rocket, User, Clock, FileText } from 'lucide-react';
 import { useReviewStore } from '../../store/useReviewStore';
-import type { TraceStage } from '../../types';
+import type { TraceStage, PlayerFeedback } from '../../types';
 import { clsx } from 'clsx';
+import { FeedbackDetailModal } from './FeedbackDetailModal';
 
 const stageMeta: Record<TraceStage, { label: string; icon: typeof MessageSquareText; color: string; step: number; }> = {
   feedback: { label: '玩家反馈', icon: MessageSquareText, color: 'border-void-500/60 text-void-400 bg-void-800/60', step: 0 },
@@ -12,15 +14,17 @@ const stageMeta: Record<TraceStage, { label: string; icon: typeof MessageSquareT
 
 export function TraceFlow() {
   const { traces, feedbacks, todos } = useReviewStore();
+  const [selectedFeedback, setSelectedFeedback] = useState<PlayerFeedback | null>(null);
 
-  // group traces by feedbackId
   const flows: Record<string, Record<TraceStage, any>> = {};
   traces.forEach((t) => {
     if (!flows[t.feedbackId]) flows[t.feedbackId] = {} as any;
-    flows[t.feedbackId][t.stage] = t;
+    if (!flows[t.feedbackId][t.stage] || t.timestamp > flows[t.feedbackId][t.stage].timestamp) {
+      flows[t.feedbackId][t.stage] = t;
+    }
   });
 
-  const flowEntries = Object.entries(flows).slice(0, 5);
+  const flowEntries = Object.entries(flows);
 
   return (
     <div className="border-t border-abyss-700/60 bg-abyss-850/60 p-4">
@@ -32,12 +36,16 @@ export function TraceFlow() {
         </span>
       </h3>
 
-      <div className="space-y-2.5">
+      <div className="space-y-2.5 max-h-72 overflow-y-auto scrollbar-thin pr-1">
         {flowEntries.map(([fbId, stages]) => {
           const fb = feedbacks.find((f) => f.id === fbId);
           const maxStep = Math.max(...(Object.keys(stages) as TraceStage[]).map((s) => stageMeta[s].step), 0);
           return (
-            <div key={fbId} className="gothic-card p-2.5">
+            <div
+              key={fbId}
+              className="gothic-card p-2.5 cursor-pointer hover:border-blood-700/50 transition-all active:scale-[0.995]"
+              onClick={() => fb && setSelectedFeedback(fb)}
+            >
               <div className="flex items-center gap-2 mb-2">
                 <p className="text-[11px] text-ghost-500 flex-1 min-w-0 truncate leading-snug">
                   {fb?.content.slice(0, 50)}{fb && fb.content.length > 50 ? '…' : ''}
@@ -85,9 +93,34 @@ export function TraceFlow() {
                             {stages[stg].nodeId}
                           </span>
                         )}
-                        {active && stages[stg].versionId && (
-                          <span className="text-[8px] text-moss-400 font-mono truncate w-full text-center">
-                            {stages[stg].versionId.slice(0, 8)}
+        {active && stages[stg].versionId && (
+                          <>
+                            <span className="text-[8px] text-moss-400 font-mono truncate w-full text-center">
+                              {stages[stg].versionName ?? stages[stg].versionId.slice(0, 8)}
+                            </span>
+                            {stages[stg].versionCode && (
+                              <span className="text-[7.5px] text-moss-500/80 font-mono truncate w-full text-center">
+                                {stages[stg].versionCode}
+                              </span>
+                            )}
+                            {stages[stg].versionTime && (
+                              <span className="text-[7px] text-ghost-700 flex items-center gap-0.5 justify-center w-full">
+                                <Clock className="w-1.5 h-1.5" />
+                                {stages[stg].versionTime.slice(5)}
+                              </span>
+                            )}
+                          </>
+                        )}
+                        {active && stages[stg].operator && (
+                          <span className="text-[7px] text-ghost-800 flex items-center gap-0.5 justify-center w-full">
+                            <User className="w-1.5 h-1.5" />
+                            {stages[stg].operator}
+                          </span>
+                        )}
+                        {active && stages[stg].note && (
+                          <span className="text-[7px] text-ghost-700 flex items-center gap-0.5 justify-center w-full">
+                            <FileText className="w-1.5 h-1.5" />
+                            {stages[stg].note.slice(0, 10)}
                           </span>
                         )}
                       </div>
@@ -105,6 +138,13 @@ export function TraceFlow() {
           <div className="py-4 text-center text-[11px] text-ghost-900">暂无回流链路</div>
         )}
       </div>
+
+      {selectedFeedback && (
+        <FeedbackDetailModal
+          feedback={selectedFeedback}
+          onClose={() => setSelectedFeedback(null)}
+        />
+      )}
     </div>
   );
 }

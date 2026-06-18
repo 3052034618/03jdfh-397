@@ -73,9 +73,10 @@ export function DiffViewer() {
     toggleRollbackItem,
     clearRollbackPlan,
     selectAllRollback,
-    executeRollbackPlan,
+    executeRollbackPlanByField,
     saveRollbackPlan,
     isInRollbackPlan,
+    getFieldRollbackPreview,
   } = useDiffStore();
   const { createTodoFromFeedback } = useReviewStore();
   const [showPlanPanel, setShowPlanPanel] = useState(false);
@@ -354,8 +355,10 @@ export function DiffViewer() {
           </button>
           <button
             onClick={() => {
-              if (confirm(`确认将选中的 ${rollbackDiffKeys.length} 项变更回滚到旧版？`)) {
-                executeRollbackPlan();
+              const preview = getFieldRollbackPreview();
+              const msg = `确认回滚 ${preview.length} 项字段级变更？\n\n涉及 ${new Set(preview.map((p: any) => p.nodeId)).size} 个节点，${new Set(preview.map((p: any) => p.field)).size} 种字段类型。`;
+              if (confirm(msg)) {
+                executeRollbackPlanByField();
               }
             }}
             className="!py-1.5 !px-3 !text-xs flex items-center gap-1.5 bg-blood-900/50 border border-blood-700/60 text-blood-400 hover:bg-blood-900/70 rounded-sm transition-colors font-semibold tracking-wider"
@@ -368,32 +371,99 @@ export function DiffViewer() {
 
       {/* 回滚计划清单抽屉 */}
       {showPlanPanel && rollbackDiffKeys.length > 0 && diffReport && (
-        <div className="absolute bottom-16 left-4 right-4 max-h-80 z-10 gothic-card p-4 overflow-y-auto scrollbar-thin">
+        <div className="absolute bottom-16 left-4 right-4 max-h-[70vh] z-10 gothic-card p-4 overflow-y-auto scrollbar-thin">
           <div className="flex items-center gap-2 mb-3">
             <h3 className="text-xs font-serif font-semibold text-ghost-500 tracking-wider">回滚清单预览</h3>
+            <span className="text-[10px] text-ghost-900 font-mono">
+              {getFieldRollbackPreview().length} 项变更 · {new Set(getFieldRollbackPreview().map((p: any) => p.nodeId)).size} 节点
+            </span>
+            <div className="ml-auto flex items-center gap-1 text-[9px]">
+              <span className="text-blood-500">红色</span>
+              <span className="text-ghost-900">= 旧值（将恢复）</span>
+              <span className="text-moss-400 ml-2">绿色</span>
+              <span className="text-ghost-900">= 现值（将回滚）</span>
+            </div>
             <button
               onClick={() => setShowPlanPanel(false)}
-              className="ml-auto text-ghost-900 hover:text-blood-400 text-xs"
+              className="ml-2 text-ghost-900 hover:text-blood-400 text-xs"
             >
               关闭 ✕
             </button>
           </div>
-          <div className="space-y-1.5">
-            {diffReport.nodeDiffs
-              .filter((d) => isInRollbackPlan(d.nodeId, d.field))
-              .map((diff) => (
-                <div
-                  key={diff.nodeId + diff.field}
-                  className="flex items-center gap-2 p-2 rounded-sm bg-abyss-800/50 border border-abyss-700/50 text-[10px]"
-                >
-                  <span className={`px-1.5 py-0.5 rounded-sm border ${severityStyle[diff.severity].color} ${severityStyle[diff.severity].bg} ${severityStyle[diff.severity].border}`}>
-                    {severityStyle[diff.severity].label}
-                  </span>
-                  <span className="font-mono text-ghost-700">{diff.nodeId}</span>
-                  <span className="text-ghost-500 flex-1 truncate">{diff.description}</span>
-                  <span className="text-ghost-900 font-mono">{diff.field}</span>
+          <div className="space-y-3">
+            {(() => {
+              const items = getFieldRollbackPreview();
+              // 按字段类型分组
+              const byField: Record<string, any[]> = {};
+              items.forEach((it: any) => {
+                const key = it.field;
+                if (!byField[key]) byField[key] = [];
+                byField[key].push(it);
+              });
+              const fieldLabels: Record<string, string> = {
+                text: '对白文本',
+                emotion: '情绪配置',
+                choices: '选项',
+                visibleInfo: '可见信息',
+                conditions: '触发条件',
+              };
+              return Object.entries(byField).map(([field, fieldItems]) => (
+                <div key={field} className="gothic-card p-2.5">
+                  <div className="flex items-center gap-2 mb-2">
+                    <h4 className="text-[11px] font-semibold text-ghost-500 tracking-wider">
+                      {fieldLabels[field] ?? field}
+                    </h4>
+                    <span className="text-[9px] text-ghost-900 font-mono">{fieldItems.length} 处</span>
+                  </div>
+                  <div className="space-y-1.5">
+                    {fieldItems.map((item: any) => {
+                      const diff = diffReport.nodeDiffs.find(
+                        (d) => d.nodeId === item.nodeId && d.field === item.field
+                      );
+                      const sev = diff ? severityStyle[diff.severity] : severityStyle.medium;
+                      return (
+                        <div key={item.nodeId + item.field} className="bg-abyss-800/40 rounded-sm p-2 border border-abyss-700/50">
+                          <div className="flex items-center gap-2 mb-1.5">
+                            <span className={clsx('px-1.5 py-0.5 text-[8.5px] font-bold tracking-wider rounded-sm border', sev.color, sev.bg, sev.border)}>
+                              {sev.label}
+                            </span>
+                            <span className="text-[9px] font-mono text-ghost-700">{item.nodeId}</span>
+                            {diff?.suspenseRisk && (
+                              <span className="text-[8.5px] text-blood-400">⚠ 悬念风险</span>
+                            )}
+                            {diff && (
+                              <span className="text-[9px] text-ghost-900 ml-auto">{diff.description}</span>
+                            )}
+                          </div>
+                          <div className="grid grid-cols-2 gap-2">
+                            <div className="p-1.5 rounded-sm bg-blood-900/15 border border-blood-800/30">
+                              <p className="text-[8px] text-blood-500 tracking-wider mb-0.5 uppercase">← 将恢复为</p>
+                              <p className="text-[10px] text-ghost-900/80 leading-relaxed break-words font-medium">
+                                {Array.isArray(item.oldValue)
+                                  ? item.oldValue.join(', ') || '(空)'
+                                  : typeof item.oldValue === 'object'
+                                  ? JSON.stringify(item.oldValue, null, 1)
+                                  : String(item.oldValue)}
+                              </p>
+                            </div>
+                            <div className="p-1.5 rounded-sm bg-moss-800/20 border border-moss-700/40">
+                              <p className="text-[8px] text-moss-500 tracking-wider mb-0.5 uppercase">当前值 →</p>
+                              <p className="text-[10px] text-ghost-500 leading-relaxed break-words">
+                                {Array.isArray(item.newValue)
+                                  ? item.newValue.join(', ') || '(空)'
+                                  : typeof item.newValue === 'object'
+                                  ? JSON.stringify(item.newValue, null, 1)
+                                  : String(item.newValue)}
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
-              ))}
+              ));
+            })()}
           </div>
         </div>
       )}

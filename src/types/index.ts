@@ -74,13 +74,37 @@ export interface ReviewTodo {
   relatedNodeId?: string;
   assignee: string;
   createdAt: string;
+  createdBy?: string;
   resolvedAt?: string;
   resolvedVersion?: string;
+  resolvedVersionId?: string;
+  processingNote?: string;
+  resolvedNote?: string;
 }
 
 export type TraceStage = 'feedback' | 'todo' | 'edit' | 'release';
 
 export type VersionStatus = 'draft' | 'pending-review' | 'published' | 'archived';
+
+export type AuditAction =
+  | 'create_draft'
+  | 'submit_review'
+  | 'reject_review'
+  | 'approve_publish'
+  | 'rollback_executed'
+  | 'rollback_planned'
+  | 'archive'
+  | 'unarchive';
+
+export interface VersionAuditLog {
+  id: string;
+  versionId: string;
+  action: AuditAction;
+  operator: string;
+  timestamp: string;
+  note?: string;
+  relatedTodoId?: string;
+}
 
 export interface TraceLink {
   id: string;
@@ -90,8 +114,11 @@ export interface TraceLink {
   versionId?: string;
   versionName?: string;
   versionCode?: string;
+  versionTime?: string;
   stage: TraceStage;
   timestamp: string;
+  operator?: string;
+  note?: string;
 }
 
 export interface VersionSnapshot {
@@ -102,12 +129,14 @@ export interface VersionSnapshot {
   createdAt: string;
   createdBy: string;
   chapterId: string;
+  baselineVersionId?: string;
   nodes: DialogNode[];
   tags: string[];
   description: string;
   publishTime?: string;
   reviewNote?: string;
   relatedTodoIds?: string[];
+  auditLogs?: VersionAuditLog[];
 }
 
 export type DiffType = 'text' | 'emotion' | 'choice' | 'condition' | 'visible_info';

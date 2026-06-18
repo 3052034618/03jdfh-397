@@ -8,6 +8,8 @@ import type {
   DialogNode,
   VersionStatus,
   RollbackPlan,
+  VersionAuditLog,
+  AuditAction,
 } from '../types';
 import { versions as mockVersions } from '../data/versions';
 
@@ -233,6 +235,18 @@ interface DiffState {
 
   // ========== 关联待办 ==========
   linkTodoToVersion: (versionId: string, todoId: string) => void;
+
+  // ========== 操作日志 ==========
+  addAuditLog: (versionId: string, action: AuditAction, note?: string, relatedTodoId?: string) => void;
+
+  // ========== 按字段回滚 ==========
+  rollbackByFields: (nodeId: string, fields: string[]) => void;
+  executeRollbackPlanByField: () => { nodeIds: string[]; fields: string[] };
+
+  // ========== 版本审查 ==========
+  getVersionReviewDiff: (versionId: string, baselineId?: string) => DiffReport | null;
+  setBaselineForVersion: (versionId: string, baselineId: string) => void;
+  getFieldRollbackPreview: () => Array<{ nodeId: string; field: string; oldValue: any; newValue: any }>;
 }
 
 export const useDiffStore = create<DiffState>()(
@@ -291,6 +305,11 @@ export const useDiffStore = create<DiffState>()(
         const newId = `ver-${Date.now()}`;
         const stamp = new Date();
         const verCode = `draft-${stamp.getFullYear()}${String(stamp.getMonth() + 1).padStart(2, '0')}${String(stamp.getDate()).padStart(2, '0')}-${String(stamp.getHours()).padStart(2, '0')}${String(stamp.getMinutes()).padStart(2, '0')}`;
+        // 自动找该章节最新已发布版本作为基线
+        const chapterPublished = get()
+          .versions.filter((v) => v.chapterId === chapterId && v.status === 'published')
+          .sort((a, b) => (a.createdAt > b.createdAt ? -1 : 1));
+        const baseline = chapterPublished[0];
         const newVersion: VersionSnapshot = {
           id: newId,
           name,
@@ -299,12 +318,16 @@ export const useDiffStore = create<DiffState>()(
           createdAt: stamp.toLocaleString('zh-CN'),
           createdBy: '当前用户',
           chapterId,
+          baselineVersionId: baseline?.id,
           nodes: JSON.parse(JSON.stringify(chapterNodes)),
           tags: ['草稿', '热修'],
           description,
           relatedTodoIds: [],
+          auditLogs: [],
         };
         set((s) => ({ versions: [...s.versions, newVersion] }));
+        // 记录创建草稿操作日志
+        get().addAuditLog(newId, 'create_draft', description);
         return newId;
       },
 
@@ -408,7 +431,8 @@ export const useDiffStore = create<DiffState>()(
       },
 
       // ========== 版本状态流转 ==========
-      updateVersionStatus: (versionId, status, note) =>
+      updateVersionStatus: (versionId, status, note) => {
+        const version = get().getVersionById(versionId);
         set((s) => ({
           versions: s.versions.map((v) =>
             v.id === versionId
@@ -423,7 +447,20 @@ export const useDiffStore = create<DiffState>()(
                 }
               : v
           ),
-        })),
+        }));
+        // 根据状态变化记录不同审计日志
+        if (status === 'pending-review') {
+          get().addAuditLog(versionId, 'submit_review', note);
+        } else if (status === 'published') {
+          get().addAuditLog(versionId, 'approve_publish', note);
+        } else if (status === 'draft' && version?.status === 'pending-review') {
+          get().addAuditLog(versionId, 'reject_review', note);
+        } else if (status === 'archived') {
+          get().addAuditLog(versionId, 'archive', note);
+        } else if (status === 'draft' && version?.status === 'archived') {
+          get().addAuditLog(versionId, 'unarchive', note);
+        }
+      },
 
       promoteDraftToPending: (versionId) => {
         get().updateVersionStatus(versionId, 'pending-review', '提交审核');
@@ -447,6 +484,177 @@ export const useDiffStore = create<DiffState>()(
               : v
           ),
         })),
+
+      // ========== 操作日志 ==========
+      addAuditLog: (versionId, action, note, relatedTodoId) => {
+        const log: VersionAuditLog = {
+          id: `audit-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          versionId,
+          action,
+          operator: '当前用户',
+          timestamp: new Date().toLocaleString('zh-CN'),
+          note,
+          relatedTodoId,
+        };
+        set((s) => ({
+          versions: s.versions.map((v) =>
+            v.id === versionId
+              ? {
+                  ...v,
+                  auditLogs: [...(v.auditLogs ?? []), log],
+                }
+              : v
+          ),
+        }));
+      },
+
+      // ========== 按字段回滚 ==========
+      rollbackByFields: (nodeId, fields) => {
+        const { diffReport, versions, newVersionId } = get();
+        if (!diffReport || !newVersionId) return;
+        const oldNode = diffReport.oldVersion.nodes.find((n) => n.id === nodeId);
+        if (!oldNode) return;
+
+        set((s) => ({
+          versions: s.versions.map((v) =>
+            v.id === newVersionId
+              ? {
+                  ...v,
+                  nodes: v.nodes.map((n) => {
+                    if (n.id !== nodeId) return n;
+                    const patch: any = {};
+                    fields.forEach((field) => {
+                      if (field === 'emotion') {
+                        patch.emotion = JSON.parse(JSON.stringify(oldNode.emotion));
+                      } else if (field === 'choices') {
+                        patch.choices = JSON.parse(JSON.stringify(oldNode.choices ?? []));
+                      } else if (field === 'visibleInfo') {
+                        patch.visibleInfo = [...oldNode.visibleInfo];
+                      } else if (field in oldNode) {
+                        (patch as any)[field] = (oldNode as any)[field];
+                      }
+                    });
+                    return { ...n, ...patch };
+                  }),
+                }
+              : v
+          ),
+        }));
+
+        const freshVersions = get().versions;
+        const oldV = freshVersions.find((v) => v.id === diffReport.oldVersion.id);
+        const newV = freshVersions.find((v) => v.id === newVersionId);
+        if (oldV && newV) {
+          set({ diffReport: buildDiffReport(oldV, newV) });
+        }
+      },
+
+      executeRollbackPlanByField: () => {
+        const { diffReport, rollbackDiffKeys, newVersionId } = get();
+        if (!diffReport || !newVersionId || rollbackDiffKeys.length === 0) {
+          return { nodeIds: [], fields: [] };
+        }
+
+        const fieldMap = new Map<string, string[]>();
+        rollbackDiffKeys.forEach((key) => {
+          const [nodeId, field] = key.split('|');
+          const existing = fieldMap.get(nodeId) ?? [];
+          if (!existing.includes(field)) {
+            existing.push(field);
+            fieldMap.set(nodeId, existing);
+          }
+        });
+
+        const oldNodes = diffReport.oldVersion.nodes;
+        const oldMap = new Map(oldNodes.map((n) => [n.id, n]));
+
+        set((s) => ({
+          versions: s.versions.map((v) =>
+            v.id === newVersionId
+              ? {
+                  ...v,
+                  nodes: v.nodes.map((n) => {
+                    const fields = fieldMap.get(n.id);
+                    if (!fields || !oldMap.has(n.id)) return n;
+                    const oldNode = oldMap.get(n.id)!;
+                    const patch: any = {};
+                    fields.forEach((field) => {
+                      if (field === '__added__') return;
+                      if (field === '__removed__') return;
+                      if (field === 'emotion') {
+                        patch.emotion = JSON.parse(JSON.stringify(oldNode.emotion));
+                      } else if (field === 'choices') {
+                        patch.choices = JSON.parse(JSON.stringify(oldNode.choices ?? []));
+                      } else if (field === 'visibleInfo') {
+                        patch.visibleInfo = [...oldNode.visibleInfo];
+                      } else if (field in oldNode) {
+                        (patch as any)[field] = (oldNode as any)[field];
+                      }
+                    });
+                    return { ...n, ...patch };
+                  }),
+                }
+              : v
+          ),
+          rollbackDiffKeys: [],
+        }));
+
+        get().addAuditLog(
+          newVersionId,
+          'rollback_executed',
+          `回滚 ${rollbackDiffKeys.length} 项变更`
+        );
+
+        const freshVersions = get().versions;
+        const oldV = freshVersions.find((v) => v.id === diffReport.oldVersion.id);
+        const newV = freshVersions.find((v) => v.id === newVersionId);
+        if (oldV && newV) {
+          set({ diffReport: buildDiffReport(oldV, newV) });
+        }
+
+        return {
+          nodeIds: Array.from(fieldMap.keys()),
+          fields: rollbackDiffKeys,
+        };
+      },
+
+      // ========== 版本审查 ==========
+      getVersionReviewDiff: (versionId, baselineId) => {
+        const version = get().getVersionById(versionId);
+        if (!version) return null;
+        const bid = baselineId ?? version.baselineVersionId;
+        if (!bid) return null;
+        const baseline = get().getVersionById(bid);
+        if (!baseline) return null;
+        return buildDiffReport(baseline, version);
+      },
+
+      setBaselineForVersion: (versionId, baselineId) =>
+        set((s) => ({
+          versions: s.versions.map((v) =>
+            v.id === versionId ? { ...v, baselineVersionId: baselineId } : v
+          ),
+        })),
+
+      getFieldRollbackPreview: () => {
+        const { diffReport, rollbackDiffKeys } = get();
+        if (!diffReport) return [];
+        return rollbackDiffKeys
+          .map((key) => {
+            const [nodeId, field] = key.split('|');
+            const diff = diffReport.nodeDiffs.find(
+              (d) => d.nodeId === nodeId && d.field === field
+            );
+            if (!diff) return null;
+            return {
+              nodeId,
+              field,
+              oldValue: diff.oldValue,
+              newValue: diff.newValue,
+            };
+          })
+          .filter(Boolean) as any;
+      },
     }),
     {
       name: 'diff-storage',

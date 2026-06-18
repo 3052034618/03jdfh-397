@@ -33,12 +33,14 @@ interface ReviewState {
     assignee: string,
     relatedNodeId?: string
   ) => ReviewTodo;
-  updateTodoStatus: (id: string, status: TodoStatus) => void;
-  resolveTodoWithVersion: (todoId: string, versionId: string) => void;
+  updateTodoStatus: (id: string, status: TodoStatus, note?: string) => void;
+  resolveTodoWithVersion: (todoId: string, versionId: string, note?: string) => void;
+  updateTodoNote: (todoId: string, note: string, noteType: 'processing' | 'resolved') => void;
   linkTodoToNode: (todoId: string, nodeId: string) => void;
   addTrace: (link: Omit<TraceLink, 'id' | 'timestamp'>) => void;
   getTracesByFeedback: (feedbackId: string) => TraceLink[];
   getTracesByTodo: (todoId: string) => TraceLink[];
+  getTodosByFeedback: (feedbackId: string) => ReviewTodo[];
 }
 
 export const useReviewStore = create<ReviewState>()(
@@ -72,6 +74,7 @@ export const useReviewStore = create<ReviewState>()(
         relatedNodeId
       ) => {
         const id = `todo-${Date.now()}`;
+        const now = new Date().toLocaleString('zh-CN');
         const newTodo: ReviewTodo = {
           id,
           title,
@@ -81,34 +84,38 @@ export const useReviewStore = create<ReviewState>()(
           feedbackIds,
           relatedNodeId,
           assignee,
-          createdAt: new Date().toLocaleString('zh-CN'),
+          createdAt: now,
+          createdBy: '当前用户',
         };
         set((s) => ({ todos: [newTodo, ...s.todos] }));
-        // 给每条反馈都写 todo 阶段 trace
+        // 给每条反馈都写 todo 阶段 trace，带上操作人
         feedbackIds.forEach((fid) => {
-          get().addTrace({ feedbackId: fid, todoId: id, stage: 'todo' });
+          get().addTrace({
+            feedbackId: fid,
+            todoId: id,
+            stage: 'todo',
+            operator: '当前用户',
+          });
         });
         return newTodo;
       },
 
-      updateTodoStatus: (id, status) => {
+      updateTodoStatus: (id, status, note) => {
         const todo = get().todos.find((t) => t.id === id);
+        const now = new Date().toLocaleString('zh-CN');
         set((s) => ({
           todos: s.todos.map((t) =>
             t.id === id
               ? {
                   ...t,
                   status,
-                  resolvedAt:
-                    status === 'resolved'
-                      ? new Date().toLocaleString('zh-CN')
-                      : t.resolvedAt,
+                  resolvedAt: status === 'resolved' ? now : t.resolvedAt,
+                  processingNote: status === 'processing' ? note : t.processingNote,
                 }
               : t
           ),
         }));
         if (todo) {
-          // 推进到处理中：给每条反馈写 edit 阶段 trace
           if (status === 'processing') {
             todo.feedbackIds.forEach((fid) => {
               get().addTrace({
@@ -116,16 +123,19 @@ export const useReviewStore = create<ReviewState>()(
                 todoId: todo.id,
                 nodeId: todo.relatedNodeId,
                 stage: 'edit',
+                operator: '当前用户',
+                note,
               });
             });
           }
         }
       },
 
-      resolveTodoWithVersion: (todoId, versionId) => {
+      resolveTodoWithVersion: (todoId, versionId, note) => {
         const todo = get().todos.find((t) => t.id === todoId);
         const version = useDiffStore.getState().getVersionById(versionId);
         const now = new Date().toLocaleString('zh-CN');
+        const versionTime = version?.publishTime ?? version?.createdAt ?? now;
 
         set((s) => ({
           todos: s.todos.map((t) =>
@@ -135,17 +145,17 @@ export const useReviewStore = create<ReviewState>()(
                   status: 'resolved',
                   resolvedAt: now,
                   resolvedVersion: version?.name ?? versionId,
+                  resolvedVersionId: versionId,
+                  resolvedNote: note ?? t.resolvedNote,
                 }
               : t
           ),
         }));
 
-        // 关联版本到待办
         if (version) {
           useDiffStore.getState().linkTodoToVersion(versionId, todoId);
         }
 
-        // 给每条反馈写 release 阶段 trace，带上版本名/号/时间
         if (todo) {
           todo.feedbackIds.forEach((fid) => {
             get().addTrace({
@@ -155,11 +165,28 @@ export const useReviewStore = create<ReviewState>()(
               versionId,
               versionName: version?.name,
               versionCode: version?.versionCode,
+              versionTime,
               stage: 'release',
+              operator: '当前用户',
+              note,
             });
           });
         }
       },
+
+      updateTodoNote: (todoId, note, noteType) =>
+        set((s) => ({
+          todos: s.todos.map((t) =>
+            t.id === todoId
+              ? {
+                  ...t,
+                  ...(noteType === 'processing'
+                    ? { processingNote: note }
+                    : { resolvedNote: note }),
+                }
+              : t
+          ),
+        })),
 
       linkTodoToNode: (todoId, nodeId) => {
         const todo = get().todos.find((t) => t.id === todoId);
@@ -168,7 +195,6 @@ export const useReviewStore = create<ReviewState>()(
             t.id === todoId ? { ...t, relatedNodeId: nodeId } : t
           ),
         }));
-        // 关联节点时，如果待办非待办状态，给每条反馈补 edit trace
         if (todo && todo.status !== 'pending') {
           todo.feedbackIds.forEach((fid) => {
             get().addTrace({
@@ -176,6 +202,7 @@ export const useReviewStore = create<ReviewState>()(
               todoId,
               nodeId,
               stage: 'edit',
+              operator: '当前用户',
             });
           });
         }
@@ -195,6 +222,9 @@ export const useReviewStore = create<ReviewState>()(
 
       getTracesByTodo: (todoId) =>
         get().traces.filter((t) => t.todoId === todoId),
+
+      getTodosByFeedback: (feedbackId) =>
+        get().todos.filter((t) => t.feedbackIds.includes(feedbackId)),
     }),
     {
       name: 'review-storage',

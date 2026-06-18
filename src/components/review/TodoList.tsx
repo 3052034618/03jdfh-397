@@ -1,15 +1,22 @@
 import { useState } from 'react';
 import { clsx } from 'clsx';
-import { CheckCircle2, Clock, XCircle, Play, User, GitBranch, History, X, Package, Tag } from 'lucide-react';
+import { CheckCircle2, Clock, XCircle, Play, User, GitBranch, History, X, Package, Tag, FileText } from 'lucide-react';
 import { useReviewStore } from '../../store/useReviewStore';
 import { useDiffStore } from '../../store/useDiffStore';
-import type { TodoStatus, TodoPriority, VersionSnapshot } from '../../types';
+import type { TodoStatus, TodoPriority, VersionSnapshot, VersionStatus } from '../../types';
 
 const statusMeta: Record<TodoStatus, { label: string; color: string; icon: typeof Play; }> = {
   pending: { label: '待处理', color: 'text-ghost-700 bg-abyss-700/60 border-abyss-600/60', icon: Clock },
   processing: { label: '处理中', color: 'text-amber-400 bg-amber-900/40 border-amber-700/50 animate-pulse-slow', icon: Play },
   resolved: { label: '已解决', color: 'text-moss-400 bg-moss-800/50 border-moss-700/50', icon: CheckCircle2 },
   rejected: { label: '已拒绝', color: 'text-ghost-900 bg-abyss-700/40 border-abyss-600/50', icon: XCircle },
+};
+
+const versionStatusLabel: Record<VersionStatus, { label: string; color: string }> = {
+  draft: { label: '草稿', color: 'text-ghost-600 bg-abyss-700/50 border-abyss-600/50' },
+  'pending-review': { label: '待审核', color: 'text-amber-400 bg-amber-900/30 border-amber-700/50' },
+  published: { label: '已发布', color: 'text-moss-400 bg-moss-800/40 border-moss-700/50' },
+  archived: { label: '已归档', color: 'text-ghost-900 bg-abyss-800/40 border-abyss-700/50' },
 };
 
 const priorityColor: Record<TodoPriority, string> = {
@@ -24,6 +31,7 @@ export function TodoList() {
   const { versions: allVersions } = useDiffStore();
   const [resolveModalTodoId, setResolveModalTodoId] = useState<string | null>(null);
   const [selectedVersionId, setSelectedVersionId] = useState<string>('');
+  const [resolveNote, setResolveNote] = useState('');
 
   const byStatus = {
     pending: todos.filter((t) => t.status === 'pending'),
@@ -35,18 +43,20 @@ export function TodoList() {
   const openResolveModal = (todoId: string) => {
     setResolveModalTodoId(todoId);
     setSelectedVersionId('');
+    setResolveNote('');
   };
 
   const handleConfirmResolve = () => {
     if (!resolveModalTodoId || !selectedVersionId) return;
-    resolveTodoWithVersion(resolveModalTodoId, selectedVersionId);
+    resolveTodoWithVersion(resolveModalTodoId, selectedVersionId, resolveNote.trim() || undefined);
     setResolveModalTodoId(null);
   };
 
   const modalTodo = resolveModalTodoId ? todos.find((t) => t.id === resolveModalTodoId) : null;
-  const publishedVersions = allVersions.filter(
-    (v) => v.status === 'published' || v.status === 'pending-review'
-  );
+  const selectableVersions = allVersions.filter((v) => v.status !== 'archived');
+
+  const getTimeForVersion = (v: VersionSnapshot) =>
+    v.status === 'published' ? v.publishTime : v.createdAt;
 
   return (
     <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin p-3 space-y-3 relative">
@@ -180,50 +190,63 @@ export function TodoList() {
             </div>
 
             <div className="mb-2">
-              <label className="gothic-label">选择发布版本</label>
-              <div className="space-y-1.5 max-h-64 overflow-y-auto scrollbar-thin pr-1">
-                {publishedVersions.length === 0 ? (
+              <label className="gothic-label">选择版本（草稿/待审核/已发布均可）</label>
+              <div className="space-y-1.5 max-h-56 overflow-y-auto scrollbar-thin pr-1">
+                {selectableVersions.length === 0 ? (
                   <div className="text-[11px] text-ghost-900 py-4 text-center border border-dashed border-abyss-600/60 rounded-sm">
-                    暂无已发布版本
+                    暂无版本
                   </div>
                 ) : (
-                  publishedVersions.map((v) => (
-                    <button
-                      key={v.id}
-                      onClick={() => setSelectedVersionId(v.id)}
-                      className={clsx(
-                        'w-full text-left p-2.5 rounded-sm border transition-all',
-                        selectedVersionId === v.id
-                          ? 'border-moss-600/70 bg-moss-900/30'
-                          : 'border-abyss-700/60 bg-abyss-800/30 hover:border-abyss-600/70 hover:bg-abyss-800/60'
-                      )}
-                    >
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs font-medium text-ghost-500">{v.name}</span>
-                        <span
-                          className={clsx(
-                            'text-[9px] px-1 py-0.5 rounded-sm border',
-                            v.status === 'published'
-                              ? 'text-moss-400 bg-moss-800/40 border-moss-700/50'
-                              : 'text-amber-400 bg-amber-900/30 border-amber-700/50'
-                          )}
-                        >
-                          {v.status === 'published' ? '已发布' : '待审核'}
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-2 mt-1 text-[10px] text-ghost-900">
-                        <span className="flex items-center gap-0.5">
-                          <Tag className="w-2.5 h-2.5" /> {v.versionCode}
-                        </span>
-                        <span>·</span>
-                        <span>{v.createdAt.slice(5)}</span>
-                        <span>·</span>
-                        <span>{v.nodes.length} 节点</span>
-                      </div>
-                    </button>
-                  ))
+                  selectableVersions.map((v) => {
+                    const vs = versionStatusLabel[v.status];
+                    const time = getTimeForVersion(v);
+                    return (
+                      <button
+                        key={v.id}
+                        onClick={() => setSelectedVersionId(v.id)}
+                        className={clsx(
+                          'w-full text-left p-2.5 rounded-sm border transition-all',
+                          selectedVersionId === v.id
+                            ? 'border-moss-600/70 bg-moss-900/30'
+                            : 'border-abyss-700/60 bg-abyss-800/30 hover:border-abyss-600/70 hover:bg-abyss-800/60'
+                        )}
+                      >
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-medium text-ghost-500 truncate">{v.name}</span>
+                          <span
+                            className={clsx(
+                              'text-[9px] px-1 py-0.5 rounded-sm border shrink-0',
+                              vs.color
+                            )}
+                          >
+                            {vs.label}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-2 mt-1 text-[10px] text-ghost-900 flex-wrap">
+                          <span className="flex items-center gap-0.5">
+                            <Tag className="w-2.5 h-2.5" /> {v.versionCode}
+                          </span>
+                          <span>·</span>
+                          <span>{time ? time.slice(5) : '—'}</span>
+                          <span>·</span>
+                          <span>{v.nodes.length} 节点</span>
+                        </div>
+                      </button>
+                    );
+                  })
                 )}
               </div>
+            </div>
+
+            <div className="mb-1">
+              <label className="gothic-label">处理备注（可选）</label>
+              <textarea
+                value={resolveNote}
+                onChange={(e) => setResolveNote(e.target.value)}
+                rows={2}
+                className="gothic-input !py-1.5 !text-xs w-full resize-none"
+                placeholder="例如：回滚了结局节点的选项文案，经 QA 验证无回归风险"
+              />
             </div>
 
             <div className="flex gap-2 mt-4">

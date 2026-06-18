@@ -4,6 +4,7 @@ import { Package, Clock, CheckCircle2, AlertTriangle, FileWarning, GitBranch, Se
 import { useDiffStore } from '../../store/useDiffStore';
 import { useReviewStore } from '../../store/useReviewStore';
 import type { VersionStatus, VersionSnapshot } from '../../types';
+import { VersionReviewModal } from './VersionReviewModal';
 
 const statusMeta: Record<VersionStatus, { label: string; color: string; bg: string; border: string; icon: typeof Package; }> = {
   draft: { label: '草稿', color: 'text-ghost-600', bg: 'bg-abyss-700/40', border: 'border-abyss-600/60', icon: FileWarning },
@@ -16,6 +17,7 @@ export function HotfixBoard() {
   const { versions, promoteDraftToPending, publishVersion, updateVersionStatus } = useDiffStore();
   const { todos } = useReviewStore();
   const [filterStatus, setFilterStatus] = useState<VersionStatus | 'all'>('all');
+  const [selectedVersion, setSelectedVersion] = useState<VersionSnapshot | null>(null);
 
   // 按章节分组
   const chaptersMap = new Map<string, VersionSnapshot[]>();
@@ -120,9 +122,13 @@ export function HotfixBoard() {
                   return (
                     <div
                       key={v.id}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setSelectedVersion(v);
+                      }}
                       className={clsx(
-                        'p-3 rounded-sm border transition-all hover:translate-y-[-1px]',
-                        'bg-abyss-850/50 border-abyss-700/60 hover:border-abyss-600/70'
+                        'p-3 rounded-sm border transition-all hover:translate-y-[-1px] cursor-pointer group',
+                        'bg-abyss-850/50 border-abyss-700/60 hover:border-blood-700/50 hover:bg-abyss-800/50'
                       )}
                     >
                       <div className="flex items-start gap-2 mb-2">
@@ -181,7 +187,10 @@ export function HotfixBoard() {
                       <div className="mt-2.5 pt-2 border-t border-abyss-700/40 flex items-center gap-1.5">
                         {v.status === 'draft' && (
                           <button
-                            onClick={() => promoteDraftToPending(v.id)}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              promoteDraftToPending(v.id);
+                            }}
                             className="flex-1 py-1 text-[10px] text-amber-400 rounded-sm hover:bg-amber-900/20 border border-transparent hover:border-amber-700/40 transition-colors flex items-center justify-center gap-1"
                           >
                             <Send className="w-3 h-3" />
@@ -191,13 +200,19 @@ export function HotfixBoard() {
                         {v.status === 'pending-review' && (
                           <>
                             <button
-                              onClick={() => updateVersionStatus(v.id, 'draft', '退回修改')}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                updateVersionStatus(v.id, 'draft', '退回修改');
+                              }}
                               className="flex-1 py-1 text-[10px] text-ghost-800 rounded-sm hover:bg-abyss-700/50 border border-transparent hover:border-abyss-600/60 transition-colors"
                             >
                               退回
                             </button>
                             <button
-                              onClick={() => publishVersion(v.id)}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                publishVersion(v.id);
+                              }}
                               className="flex-1 py-1 text-[10px] text-moss-400 rounded-sm hover:bg-moss-900/20 border border-transparent hover:border-moss-700/40 transition-colors flex items-center justify-center gap-1"
                             >
                               <Play className="w-3 h-3" />
@@ -207,7 +222,10 @@ export function HotfixBoard() {
                         )}
                         {v.status === 'published' && (
                           <button
-                            onClick={() => updateVersionStatus(v.id, 'archived', '归档')}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              updateVersionStatus(v.id, 'archived', '归档');
+                            }}
                             className="flex-1 py-1 text-[10px] text-ghost-800 rounded-sm hover:bg-abyss-700/40 border border-transparent hover:border-abyss-600/50 transition-colors flex items-center justify-center gap-1"
                           >
                             <Archive className="w-3 h-3" />
@@ -216,7 +234,10 @@ export function HotfixBoard() {
                         )}
                         {v.status === 'archived' && (
                           <button
-                            onClick={() => updateVersionStatus(v.id, 'draft', '恢复为草稿')}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              updateVersionStatus(v.id, 'draft', '恢复为草稿');
+                            }}
                             className="flex-1 py-1 text-[10px] text-ghost-700 rounded-sm hover:bg-abyss-700/40 border border-transparent hover:border-abyss-600/50 transition-colors"
                           >
                             恢复草稿
@@ -230,6 +251,13 @@ export function HotfixBoard() {
             </div>
           );
         })
+      )}
+
+      {selectedVersion && (
+        <VersionReviewModal
+          version={selectedVersion}
+          onClose={() => setSelectedVersion(null)}
+        />
       )}
     </div>
   );
