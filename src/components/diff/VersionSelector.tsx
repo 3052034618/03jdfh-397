@@ -10,6 +10,7 @@ export function VersionSelector() {
     newVersionId,
     selectOldVersion,
     selectNewVersion,
+    computeDiff,
   } = useDiffStore();
 
   const oldV = versions.find((v) => v.id === oldVersionId);
@@ -67,7 +68,7 @@ export function VersionSelector() {
             </div>
           )}
         </div>
-        <button className="gothic-btn-primary !py-1.5 !px-4 !text-xs">生成差异报告</button>
+        <button onClick={() => computeDiff()} className="gothic-btn-primary !py-1.5 !px-4 !text-xs">生成差异报告</button>
       </div>
     </div>
   );

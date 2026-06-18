@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
 import type {
   PlayerFeedback,
   ReviewTodo,
@@ -6,8 +7,8 @@ import type {
   TodoPriority,
   TodoStatus,
 } from '../types';
-import { feedbacks } from '../data/feedbacks';
-import { todos, traces } from '../data/todos';
+import { feedbacks as defaultFeedbacks } from '../data/feedbacks';
+import { todos as defaultTodos, traces as defaultTraces } from '../data/todos';
 
 interface ReviewState {
   feedbacks: PlayerFeedback[];
@@ -36,83 +37,95 @@ interface ReviewState {
   addTrace: (link: Omit<TraceLink, 'id' | 'timestamp'>) => void;
 }
 
-export const useReviewStore = create<ReviewState>((set, get) => ({
-  feedbacks,
-  todos,
-  traces,
-  selectedFeedbackIds: [],
-  filterSource: null,
-  filterSentiment: null,
-  sortBy: 'heat',
+export const useReviewStore = create<ReviewState>()(
+  persist(
+    (set, get) => ({
+      feedbacks: defaultFeedbacks,
+      todos: defaultTodos,
+      traces: defaultTraces,
+      selectedFeedbackIds: [],
+      filterSource: null,
+      filterSentiment: null,
+      sortBy: 'heat',
 
-  toggleFeedbackSelection: (id) =>
-    set((s) => ({
-      selectedFeedbackIds: s.selectedFeedbackIds.includes(id)
-        ? s.selectedFeedbackIds.filter((x) => x !== id)
-        : [...s.selectedFeedbackIds, id],
-    })),
-  clearFeedbackSelection: () => set({ selectedFeedbackIds: [] }),
-  setFilterSource: (s) => set({ filterSource: s }),
-  setFilterSentiment: (s) => set({ filterSentiment: s }),
-  setSortBy: (s) => set({ sortBy: s }),
+      toggleFeedbackSelection: (id) =>
+        set((s) => ({
+          selectedFeedbackIds: s.selectedFeedbackIds.includes(id)
+            ? s.selectedFeedbackIds.filter((x) => x !== id)
+            : [...s.selectedFeedbackIds, id],
+        })),
+      clearFeedbackSelection: () => set({ selectedFeedbackIds: [] }),
+      setFilterSource: (s) => set({ filterSource: s }),
+      setFilterSentiment: (s) => set({ filterSentiment: s }),
+      setSortBy: (s) => set({ sortBy: s }),
 
-  createTodoFromFeedback: (
-    feedbackIds,
-    title,
-    description,
-    priority,
-    assignee,
-    relatedNodeId
-  ) => {
-    const id = `todo-${Date.now()}`;
-    const newTodo: ReviewTodo = {
-      id,
-      title,
-      description,
-      priority,
-      status: 'pending',
-      feedbackIds,
-      relatedNodeId,
-      assignee,
-      createdAt: new Date().toLocaleString('zh-CN'),
-    };
-    set((s) => ({ todos: [newTodo, ...s.todos] }));
-    const relatedFb = get().feedbacks.find((f) => f.id === feedbackIds[0]);
-    if (relatedFb) {
-      get().addTrace({ feedbackId: relatedFb.id, todoId: id, stage: 'todo' });
+      createTodoFromFeedback: (
+        feedbackIds,
+        title,
+        description,
+        priority,
+        assignee,
+        relatedNodeId
+      ) => {
+        const id = `todo-${Date.now()}`;
+        const newTodo: ReviewTodo = {
+          id,
+          title,
+          description,
+          priority,
+          status: 'pending',
+          feedbackIds,
+          relatedNodeId,
+          assignee,
+          createdAt: new Date().toLocaleString('zh-CN'),
+        };
+        set((s) => ({ todos: [newTodo, ...s.todos] }));
+        const relatedFb = get().feedbacks.find((f) => f.id === feedbackIds[0]);
+        if (relatedFb) {
+          get().addTrace({ feedbackId: relatedFb.id, todoId: id, stage: 'todo' });
+        }
+        return newTodo;
+      },
+
+      updateTodoStatus: (id, status) =>
+        set((s) => ({
+          todos: s.todos.map((t) =>
+            t.id === id
+              ? {
+                  ...t,
+                  status,
+                  resolvedAt:
+                    status === 'resolved'
+                      ? new Date().toLocaleString('zh-CN')
+                      : t.resolvedAt,
+                }
+              : t
+          ),
+        })),
+
+      linkTodoToNode: (todoId, nodeId) =>
+        set((s) => ({
+          todos: s.todos.map((t) =>
+            t.id === todoId ? { ...t, relatedNodeId: nodeId } : t
+          ),
+        })),
+
+      addTrace: (link) => {
+        const newLink: TraceLink = {
+          ...link,
+          id: `tr-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          timestamp: new Date().toLocaleString('zh-CN'),
+        };
+        set((s) => ({ traces: [...s.traces, newLink] }));
+      },
+    }),
+    {
+      name: 'review-storage',
+      partialize: (state) => ({
+        todos: state.todos,
+        traces: state.traces,
+        feedbacks: state.feedbacks,
+      }),
     }
-    return newTodo;
-  },
-
-  updateTodoStatus: (id, status) =>
-    set((s) => ({
-      todos: s.todos.map((t) =>
-        t.id === id
-          ? {
-              ...t,
-              status,
-              resolvedAt:
-                status === 'resolved'
-                  ? new Date().toLocaleString('zh-CN')
-                  : t.resolvedAt,
-            }
-          : t
-      ),
-    })),
-
-  linkTodoToNode: (todoId, nodeId) =>
-    set((s) => ({
-      todos: s.todos.map((t) =>
-        t.id === todoId ? { ...t, relatedNodeId: nodeId } : t
-      ),
-    })),
-
-  addTrace: (link) => {
-    const newLink: TraceLink = {
-      ...link,
-      id: `tr-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-      timestamp: new Date().toLocaleString('zh-CN'),
-    };
-    set((s) => ({ traces: [...s.traces, newLink] }));
-  },
-}));
+  )
+);
