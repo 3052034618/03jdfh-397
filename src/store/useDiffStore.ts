@@ -1,9 +1,9 @@
 import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
 import type {
   VersionSnapshot,
   DiffReport,
   NodeDiff,
-  DiffSeverity,
   EmotionProfile,
   DialogNode,
 } from '../types';
@@ -92,9 +92,7 @@ function computeNodeDiffs(
     }
 
     if (!deepCompare(oldN.visibleInfo, newN.visibleInfo)) {
-      const suspense = newN.visibleInfo.some((v) =>
-        hasSuspenseKeywords(v)
-      );
+      const suspense = newN.visibleInfo.some((v) => hasSuspenseKeywords(v));
       diffs.push({
         nodeId: id,
         diffType: 'visible_info',
@@ -116,8 +114,8 @@ function computeNodeDiffs(
           diffType: 'choice',
           severity: 'high',
           field: 'choices',
-          oldValue: oc.map((c) => ({ label: c.label, reaction: c.reaction })),
-          newValue: nc.map((c) => ({ label: c.label, reaction: c.reaction })),
+          oldValue: oc.map((c) => ({ label: c.label, reaction: c.reaction, weight: c.weight, nextNodeId: c.nextNodeId })),
+          newValue: nc.map((c) => ({ label: c.label, reaction: c.reaction, weight: c.weight, nextNodeId: c.nextNodeId })),
           suspenseRisk: oc.length !== nc.length,
           description: `选项配置变更（旧${oc.length}项→新${nc.length}项）`,
         });
@@ -148,17 +146,11 @@ function buildDiffReport(
 
   const avgOld = (key: keyof EmotionProfile) =>
     oldV.nodes.length
-      ? Math.round(
-          oldV.nodes.reduce((s, n) => s + (n.emotion[key] ?? 0), 0) /
-            oldV.nodes.length
-        )
+      ? Math.round(oldV.nodes.reduce((s, n) => s + (n.emotion[key] ?? 0), 0) / oldV.nodes.length)
       : 0;
   const avgNew = (key: keyof EmotionProfile) =>
     newV.nodes.length
-      ? Math.round(
-          newV.nodes.reduce((s, n) => s + (n.emotion[key] ?? 0), 0) /
-            newV.nodes.length
-        )
+      ? Math.round(newV.nodes.reduce((s, n) => s + (n.emotion[key] ?? 0), 0) / newV.nodes.length)
       : 0;
 
   const emotionDelta: EmotionProfile = {
@@ -174,10 +166,7 @@ function buildDiffReport(
 
   const suspenseWarnings = nodeDiffs
     .filter((d) => d.suspenseRisk)
-    .map(
-      (d) =>
-        `节点 ${d.nodeId}：${d.description}`
-    );
+    .map((d) => `节点 ${d.nodeId}：${d.description}`);
 
   return {
     chapterId: oldV.chapterId,
@@ -193,75 +182,138 @@ function buildDiffReport(
   };
 }
 
+export type VersionCompareStatus =
+  | 'ok'
+  | 'same-version'
+  | 'missing-old'
+  | 'missing-new'
+  | 'missing-both';
+
 interface DiffState {
   versions: VersionSnapshot[];
   oldVersionId: string | null;
   newVersionId: string | null;
   diffReport: DiffReport | null;
   selectedDiffIndex: number | null;
+  compareStatus: VersionCompareStatus;
 
   selectOldVersion: (id: string | null) => void;
   selectNewVersion: (id: string | null) => void;
   setSelectedDiffIndex: (idx: number | null) => void;
   computeDiff: () => void;
-  saveAsVersion: (name: string, desc: string, chapterId: string) => string;
+
+  /** 从对白树管理页保存当前章节的节点快照为热修草稿版本 */
+  saveHotfixDraftFromNodes: (
+    name: string,
+    description: string,
+    chapterId: string,
+    chapterNodes: DialogNode[]
+  ) => string;
+
+  /** 把指定版本中某节点的改动回滚到旧版对应节点 */
+  rollbackNodeDiff: (nodeId: string) => void;
 }
 
-export const useDiffStore = create<DiffState>((set, get) => ({
-  versions: mockVersions,
-  oldVersionId: 'ver-001',
-  newVersionId: 'ver-002',
-  diffReport: null,
-  selectedDiffIndex: null,
+export const useDiffStore = create<DiffState>()(
+  persist(
+    (set, get) => ({
+      versions: mockVersions,
+      oldVersionId: 'ver-001',
+      newVersionId: 'ver-002',
+      diffReport: null,
+      selectedDiffIndex: null,
+      compareStatus: 'ok',
 
-  selectOldVersion: (id) => {
-    set({ oldVersionId: id, selectedDiffIndex: null });
-    get().computeDiff();
-  },
-  selectNewVersion: (id) => {
-    set({ newVersionId: id, selectedDiffIndex: null });
-    get().computeDiff();
-  },
-  setSelectedDiffIndex: (idx) => set({ selectedDiffIndex: idx }),
+      selectOldVersion: (id) => {
+        set({ oldVersionId: id, selectedDiffIndex: null });
+        get().computeDiff();
+      },
+      selectNewVersion: (id) => {
+        set({ newVersionId: id, selectedDiffIndex: null });
+        get().computeDiff();
+      },
+      setSelectedDiffIndex: (idx) => set({ selectedDiffIndex: idx }),
 
-  computeDiff: () => {
-    const { oldVersionId, newVersionId, versions } = get();
-    if (!oldVersionId || !newVersionId) {
-      set({ diffReport: null });
-      return;
-    }
-    const oldV = versions.find((v) => v.id === oldVersionId);
-    const newV = versions.find((v) => v.id === newVersionId);
-    if (!oldV || !newV) {
-      set({ diffReport: null });
-      return;
-    }
-    if (oldV.id === newV.id) {
-      set({ diffReport: null });
-      return;
-    }
-    const report = buildDiffReport(oldV, newV);
-    set({ diffReport: report });
-  },
+      computeDiff: () => {
+        const { oldVersionId, newVersionId, versions } = get();
+        if (!oldVersionId && !newVersionId) {
+          set({ diffReport: null, compareStatus: 'missing-both' });
+          return;
+        }
+        if (!oldVersionId) {
+          set({ diffReport: null, compareStatus: 'missing-old' });
+          return;
+        }
+        if (!newVersionId) {
+          set({ diffReport: null, compareStatus: 'missing-new' });
+          return;
+        }
+        const oldV = versions.find((v) => v.id === oldVersionId);
+        const newV = versions.find((v) => v.id === newVersionId);
+        if (!oldV || !newV) {
+          set({ diffReport: null, compareStatus: oldV ? 'missing-new' : 'missing-old' });
+          return;
+        }
+        if (oldV.id === newV.id) {
+          set({ diffReport: null, compareStatus: 'same-version' });
+          return;
+        }
+        const report = buildDiffReport(oldV, newV);
+        set({ diffReport: report, compareStatus: 'ok' });
+      },
 
-  saveAsVersion: (name, desc, chapterId) => {
-    const newId = `ver-${Date.now()}`;
-    const { versions } = get();
-    const refNodes = versions[0]?.nodes ?? [];
-    const newVersion: VersionSnapshot = {
-      id: newId,
-      name,
-      createdAt: new Date().toLocaleString('zh-CN'),
-      createdBy: '当前用户',
-      chapterId,
-      nodes: [...refNodes],
-      tags: ['草稿'],
-      description: desc,
-    };
-    set((s) => ({ versions: [...s.versions, newVersion] }));
-    return newId;
-  },
-}));
+      saveHotfixDraftFromNodes: (name, description, chapterId, chapterNodes) => {
+        const newId = `ver-${Date.now()}`;
+        const newVersion: VersionSnapshot = {
+          id: newId,
+          name,
+          createdAt: new Date().toLocaleString('zh-CN'),
+          createdBy: '当前用户',
+          chapterId,
+          nodes: JSON.parse(JSON.stringify(chapterNodes)),
+          tags: ['草稿', '热修'],
+          description,
+        };
+        set((s) => ({ versions: [...s.versions, newVersion] }));
+        return newId;
+      },
+
+      rollbackNodeDiff: (nodeId) => {
+        const { diffReport, versions, selectNewVersion, newVersionId } = get();
+        if (!diffReport || !newVersionId) return;
+        const oldNode = diffReport.oldVersion.nodes.find((n) => n.id === nodeId);
+        if (!oldNode) return;
+        set((s) => ({
+          versions: s.versions.map((v) =>
+            v.id === newVersionId
+              ? {
+                  ...v,
+                  nodes: v.nodes.map((n) =>
+                    n.id === nodeId ? JSON.parse(JSON.stringify(oldNode)) : n
+                  ),
+                }
+              : v
+          ),
+        }));
+        // 重新触发差异计算
+        const freshVersions = get().versions;
+        const oldV = freshVersions.find((v) => v.id === diffReport.oldVersion.id);
+        const newV = freshVersions.find((v) => v.id === newVersionId);
+        if (oldV && newV) {
+          set({ diffReport: buildDiffReport(oldV, newV) });
+        }
+      },
+    }),
+    {
+      name: 'diff-storage',
+      partialize: (s) => ({
+        versions: s.versions,
+        oldVersionId: s.oldVersionId,
+        newVersionId: s.newVersionId,
+      }),
+    }
+  )
+);
 
 export function calcEmotionDelta(
   a: EmotionProfile,

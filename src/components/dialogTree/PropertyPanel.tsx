@@ -1,7 +1,8 @@
 import { useState } from 'react';
-import { ChevronDown, ChevronRight, Save, AlertTriangle, User, Type, Sliders, Tag, Link2 } from 'lucide-react';
+import { ChevronDown, ChevronRight, Save, AlertTriangle, User, Type, Sliders, Tag, Link2, X, GitBranch, CheckCircle2 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { useDialogStore } from '../../store/useDialogStore';
+import { useDiffStore } from '../../store/useDiffStore';
 import type { DialogChoice, EmotionProfile } from '../../types';
 
 interface CollapsibleProps {
@@ -76,8 +77,37 @@ function EmotionSlider({ label, value, min = 0, max = 100, onChange, color }: Em
 }
 
 export function PropertyPanel() {
-  const { selectedNodeId, nodes, updateNode } = useDialogStore();
+  const { selectedNodeId, nodes, updateNode, currentChapterId, chapters, getChapterNodes } = useDialogStore();
+  const { saveHotfixDraftFromNodes } = useDiffStore();
   const node = selectedNodeId ? nodes[selectedNodeId] : null;
+  const [saveToast, setSaveToast] = useState<string | null>(null);
+  const [showDraftModal, setShowDraftModal] = useState(false);
+  const [draftName, setDraftName] = useState('');
+  const [draftDesc, setDraftDesc] = useState('');
+  const [savedVersionId, setSavedVersionId] = useState<string | null>(null);
+
+  const currentChapter = chapters.find((c) => c.id === currentChapterId);
+
+  const flashToast = (msg: string) => {
+    setSaveToast(msg);
+    setTimeout(() => setSaveToast(null), 2000);
+  };
+
+  const openDraftModal = () => {
+    if (!currentChapterId) return;
+    const stamp = new Date().toLocaleString('zh-CN').replace(/\//g, '-').slice(0, 16);
+    setDraftName(`${currentChapter?.title ?? '章节'} · 热修草稿 ${stamp}`);
+    setDraftDesc('由对白树编辑器保存的热修草稿版本');
+    setSavedVersionId(null);
+    setShowDraftModal(true);
+  };
+
+  const handleSaveDraft = () => {
+    if (!currentChapterId || !draftName.trim()) return;
+    const chapterNodes = getChapterNodes(currentChapterId);
+    const vid = saveHotfixDraftFromNodes(draftName.trim(), draftDesc.trim(), currentChapterId, chapterNodes);
+    setSavedVersionId(vid);
+  };
 
   if (!node) {
     return (
@@ -291,13 +321,124 @@ export function PropertyPanel() {
         </Collapsible>
       </div>
 
-      <div className="p-3 border-t border-abyss-700/50 bg-abyss-850/50 flex gap-2">
-        <button className="gothic-btn-amber flex-1 flex items-center justify-center gap-1.5 !py-1.5 !text-xs">
-          <Save className="w-3 h-3" />
-          保存修改
-        </button>
-        <button className="gothic-btn !py-1.5 !text-xs">草稿</button>
+      <div className="p-3 border-t border-abyss-700/50 bg-abyss-850/50 flex flex-col gap-2 relative">
+        {saveToast && (
+          <div className="absolute -top-10 left-1/2 -translate-x-1/2 px-3 py-1.5 rounded-sm bg-moss-800/90 border border-moss-600/60 text-moss-300 text-[11px] flex items-center gap-1.5 shadow-lg whitespace-nowrap z-20">
+            <CheckCircle2 className="w-3 h-3" />
+            {saveToast}
+          </div>
+        )}
+        <div className="flex gap-2">
+          <button
+            onClick={() => flashToast('当前节点已保存')}
+            className="gothic-btn-amber flex-1 flex items-center justify-center gap-1.5 !py-1.5 !text-xs"
+          >
+            <Save className="w-3 h-3" />
+            保存当前节点
+          </button>
+          <button
+            onClick={openDraftModal}
+            disabled={!currentChapterId}
+            className="gothic-btn-primary !py-1.5 !px-3 !text-xs flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <GitBranch className="w-3 h-3" />
+            存为热修草稿
+          </button>
+        </div>
       </div>
+
+      {showDraftModal && (
+        <div className="absolute inset-0 bg-abyss-950/80 backdrop-blur-sm flex items-center justify-center z-50 p-6">
+          <div className="gothic-card p-5 w-full max-w-sm relative">
+            <button
+              onClick={() => setShowDraftModal(false)}
+              className="absolute top-3 right-3 w-7 h-7 rounded-sm flex items-center justify-center text-ghost-900 hover:text-blood-400 hover:bg-blood-900/30 transition-colors"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            {!savedVersionId ? (
+              <>
+                <div className="flex items-center gap-2 mb-4">
+                  <div className="w-9 h-9 rounded-sm bg-blood-800/50 border border-blood-700/60 flex items-center justify-center">
+                    <GitBranch className="w-4 h-4 text-blood-400" />
+                  </div>
+                  <div>
+                    <h3 className="font-serif font-semibold text-ghost-500 tracking-wider text-sm">
+                      保存为热修草稿版本
+                    </h3>
+                    <p className="text-[10px] text-ghost-900">
+                      保存后可在「热修对比」页选择该版本与旧版对比
+                    </p>
+                  </div>
+                </div>
+
+                <div className="space-y-3">
+                  <div>
+                    <label className="gothic-label">版本名称</label>
+                    <input
+                      value={draftName}
+                      onChange={(e) => setDraftName(e.target.value)}
+                      className="gothic-input !py-1.5 !text-xs"
+                    />
+                  </div>
+                  <div>
+                    <label className="gothic-label">变更说明（可选）</label>
+                    <textarea
+                      value={draftDesc}
+                      onChange={(e) => setDraftDesc(e.target.value)}
+                      rows={3}
+                      className="gothic-input !py-1.5 !text-xs resize-none"
+                    />
+                  </div>
+                  <div className="flex items-center justify-between text-[10px] text-ghost-900 pt-1">
+                    <span>章节：<span className="text-ghost-700">{currentChapter?.title ?? '—'}</span></span>
+                    <span>节点数：<span className="text-ghost-700 font-mono">{currentChapter?.nodeCount ?? getChapterNodes(currentChapterId ?? '').length}</span></span>
+                  </div>
+                </div>
+
+                <div className="flex gap-2 mt-4">
+                  <button
+                    onClick={() => setShowDraftModal(false)}
+                    className="gothic-btn flex-1 !py-1.5 !text-xs"
+                  >
+                    取消
+                  </button>
+                  <button
+                    onClick={handleSaveDraft}
+                    disabled={!draftName.trim()}
+                    className="gothic-btn-primary flex-1 !py-1.5 !text-xs flex items-center justify-center gap-1.5 disabled:opacity-40"
+                  >
+                    <Save className="w-3 h-3" />
+                    保存版本
+                  </button>
+                </div>
+              </>
+            ) : (
+              <div className="py-4 text-center">
+                <div className="w-14 h-14 mx-auto mb-3 rounded-full bg-moss-800/50 border border-moss-600/60 flex items-center justify-center animate-float">
+                  <CheckCircle2 className="w-7 h-7 text-moss-400" />
+                </div>
+                <h3 className="font-serif font-semibold text-ghost-500 tracking-wider text-sm mb-1">
+                  热修草稿已保存
+                </h3>
+                <p className="text-[10px] text-ghost-900 mb-2">
+                  版本ID: <span className="font-mono text-ghost-700">{savedVersionId}</span>
+                </p>
+                <p className="text-[11px] text-amber-400 leading-relaxed mb-4">
+                  前往「热修对比」页，选择该版本作为「新版」即可与旧版进行差异审查
+                </p>
+                <button
+                  onClick={() => setShowDraftModal(false)}
+                  className="gothic-btn-primary w-full !py-1.5 !text-xs"
+                >
+                  好的，我知道了
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

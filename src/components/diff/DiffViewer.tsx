@@ -1,7 +1,7 @@
-import { TrendingUp, TrendingDown, Minus, Eye, Heart, Zap } from 'lucide-react';
+import { TrendingUp, TrendingDown, Minus, Eye, Heart, Zap, RotateCcw, ChevronRight, User } from 'lucide-react';
 import { clsx } from 'clsx';
 import { useDiffStore } from '../../store/useDiffStore';
-import type { NodeDiff, DiffSeverity, EmotionProfile } from '../../types';
+import type { NodeDiff, DiffSeverity, EmotionProfile, DialogNode } from '../../types';
 
 const severityStyle: Record<DiffSeverity, { label: string; color: string; bg: string; border: string; }> = {
   low: { label: '低', color: 'text-ghost-700', bg: 'bg-abyss-700/50', border: 'border-abyss-600/60' },
@@ -43,10 +43,7 @@ function EmotionBar({ label, oldV, newV, color, min = 0, max = 100 }: { label: s
       <div className="relative h-2 bg-abyss-900/80 rounded-full overflow-hidden border border-abyss-700/60">
         <div
           className="absolute inset-y-0 left-0 opacity-50"
-          style={{
-            width: `${oldPct}%`,
-            background: `linear-gradient(90deg, ${color}40, ${color}70`,
-          }}
+          style={{ width: `${oldPct}%`, background: `linear-gradient(90deg, ${color}40, ${color}70)` }}
         />
         <div
           className="absolute inset-y-0 left-0"
@@ -64,19 +61,38 @@ function EmotionBar({ label, oldV, newV, color, min = 0, max = 100 }: { label: s
 }
 
 export function DiffViewer() {
-  const { diffReport, selectedDiffIndex, setSelectedDiffIndex } = useDiffStore();
+  const {
+    diffReport,
+    compareStatus,
+    selectedDiffIndex,
+    setSelectedDiffIndex,
+    rollbackNodeDiff,
+  } = useDiffStore();
+
   if (!diffReport) {
+    const hint =
+      compareStatus === 'same-version'
+        ? '⚠ 旧版与新版为同一个版本，请更换其中一个后再查看差异'
+        : compareStatus === 'missing-old' || compareStatus === 'missing-new' || compareStatus === 'missing-both'
+        ? '请在上方选择两个不同版本以生成差异报告'
+        : '请选择两个版本以生成差异报告…';
+
     return (
       <div className="flex-1 flex items-center justify-center">
-        <div className="text-center">
+        <div className="text-center max-w-md px-6">
           <div className="text-5xl mb-4 opacity-20 animate-float">🩸</div>
-          <p className="text-ghost-900 font-serif tracking-wider text-sm">请选择两个版本以生成差异报告…</p>
+          <p className="text-ghost-700 font-serif tracking-wider text-sm leading-relaxed whitespace-pre-line">
+            {hint}
+          </p>
         </div>
       </div>
     );
   }
 
   const { nodeDiffs, summary, oldVersion, newVersion } = diffReport;
+  const selectedDiff = selectedDiffIndex != null ? nodeDiffs[selectedDiffIndex] : null;
+  const selectedOldNode = selectedDiff ? oldVersion.nodes.find((n) => n.id === selectedDiff.nodeId) : undefined;
+  const selectedNewNode = selectedDiff ? newVersion.nodes.find((n) => n.id === selectedDiff.nodeId) : undefined;
 
   return (
     <div className="flex-1 min-h-0 flex flex-col">
@@ -87,21 +103,15 @@ export function DiffViewer() {
             icon={Eye}
             accent="#c9a227"
             diffs={nodeDiffs.filter((d) => d.diffType === 'visible_info' || d.diffType === 'text')}
-            selected={selectedDiffIndex}
-            onSelect={setSelectedDiffIndex}
-            allDiffs={nodeDiffs}
           />
           <DiffColumn
             title="角色态度与情绪"
             icon={Heart}
             accent="#c41e1e"
             diffs={nodeDiffs.filter((d) => d.diffType === 'emotion' || d.diffType === 'choice')}
-            selected={selectedDiffIndex}
-            onSelect={setSelectedDiffIndex}
-            allDiffs={nodeDiffs}
             headerExtra={
               <div className="mt-3 space-y-2 border-t border-abyss-700/50 pt-3">
-              <p className="text-[10px] text-ghost-900 tracking-widest uppercase mb-2">全章节情绪曲线变化</p>
+                <p className="text-[10px] text-ghost-900 tracking-widest uppercase mb-2">全章节情绪曲线变化</p>
                 <EmotionBar label="恐惧 Fear" oldV={avgEmotion(oldVersion.nodes, 'fear')} newV={avgEmotion(newVersion.nodes, 'fear')} color="#c41e1e" />
                 <EmotionBar label="紧张 Tension" oldV={avgEmotion(oldVersion.nodes, 'tension')} newV={avgEmotion(newVersion.nodes, 'tension')} color="#c9a227" />
                 <EmotionBar label="信任 Trust" oldV={avgEmotion(oldVersion.nodes, 'trust')} newV={avgEmotion(newVersion.nodes, 'trust')} min={-50} max={50} color="#3a7ca5" />
@@ -114,9 +124,6 @@ export function DiffViewer() {
             icon={Zap}
             accent="#6b0000"
             diffs={nodeDiffs.filter((d) => d.severity === 'high' || d.severity === 'critical')}
-            selected={selectedDiffIndex}
-            onSelect={setSelectedDiffIndex}
-            allDiffs={nodeDiffs}
             headerExtra={
               <div className="mt-3 border-t border-abyss-700/50 pt-3">
                 <FearCurve oldNodes={oldVersion.nodes} newNodes={newVersion.nodes} />
@@ -134,6 +141,12 @@ export function DiffViewer() {
             <span className="text-ghost-900">高风险项：</span>
             <span className="font-serif text-lg text-blood-400">{summary.highRiskCount}</span>
           </div>
+          <div className="flex items-center gap-1.5">
+            <span className="text-ghost-900">对比版本：</span>
+            <span className="text-ghost-700 font-mono">{oldVersion.name}</span>
+            <ChevronRight className="w-3 h-3 text-blood-500" />
+            <span className="text-moss-400 font-mono">{newVersion.name}</span>
+          </div>
           <div className="ml-auto flex gap-2">
             <button className="gothic-btn !py-1 !px-3 !text-xs">导出报告</button>
             <button className="gothic-btn-amber !py-1 !px-3 !text-xs">存为草稿</button>
@@ -142,29 +155,142 @@ export function DiffViewer() {
         </div>
       </div>
 
-      <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin p-4">
-        <h3 className="section-title flex items-center gap-2">
-          <span>所有变更列表</span>
-          <span className="text-[10px] text-ghost-900 font-sans font-normal normal-case tracking-normal ml-1">
-            （{nodeDiffs.length} 项）
-          </span>
-        </h3>
-        <div className="space-y-2">
-          {nodeDiffs.map((diff, idx) => (
-            <DiffRow key={diff.nodeId + diff.field} diff={diff} index={idx} isSelected={selectedDiffIndex === idx} onClick={() => setSelectedDiffIndex(idx)} />
-          ))}
+      <div className="flex-1 min-h-0 flex overflow-hidden">
+        <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin p-4 border-r border-abyss-700/60">
+          <h3 className="section-title flex items-center gap-2">
+            <span>所有变更列表</span>
+            <span className="text-[10px] text-ghost-900 font-sans font-normal normal-case tracking-normal ml-1">
+              （{nodeDiffs.length} 项）
+            </span>
+            {selectedDiff && (
+              <span className="ml-auto text-[10px] text-amber-400">
+                已选中 {selectedDiff.nodeId} · {selectedDiff.field}
+              </span>
+            )}
+          </h3>
+          <div className="space-y-2">
+            {nodeDiffs.map((diff, idx) => (
+              <DiffRow
+                key={diff.nodeId + diff.field}
+                diff={diff}
+                index={idx}
+                isSelected={selectedDiffIndex === idx}
+                onClick={() => setSelectedDiffIndex(idx)}
+              />
+            ))}
+          </div>
+        </div>
+
+        <div className="w-[420px] shrink-0 h-full flex flex-col bg-abyss-850/40">
+          <div className="p-3 border-b border-abyss-700/50">
+            <h3 className="section-title !mb-0 flex items-center gap-2 !border-b-0 !pb-0">
+              <Zap className="w-3.5 h-3.5 text-blood-400" />
+              节点改动详情
+            </h3>
+          </div>
+
+          {selectedDiff ? (
+            <div className="flex-1 overflow-y-auto scrollbar-thin p-3 space-y-3">
+              <div className="gothic-card p-3">
+                <div className="flex items-start justify-between gap-2 mb-2">
+                  <div>
+                    <p className="text-[10px] text-ghost-900 tracking-widest uppercase mb-0.5">目标节点</p>
+                    <p className="font-mono text-sm text-ghost-500">{selectedDiff.nodeId}</p>
+                    <p className="text-[10px] text-ghost-900 mt-0.5">
+                      字段：<span className="text-ghost-700">{selectedDiff.field}</span>
+                    </p>
+                  </div>
+                  <span className={clsx(
+                    'px-2 py-0.5 text-[9px] font-bold tracking-wider rounded-sm border',
+                    severityStyle[selectedDiff.severity].color,
+                    severityStyle[selectedDiff.severity].bg,
+                    severityStyle[selectedDiff.severity].border
+                  )}>
+                    {severityStyle[selectedDiff.severity].label}风险
+                  </span>
+                </div>
+                <p className="text-[11px] text-ghost-500 leading-relaxed">{selectedDiff.description}</p>
+                {selectedDiff.suspenseRisk && (
+                  <div className="mt-2 px-2 py-1.5 rounded-sm bg-blood-900/40 border border-blood-700/50 text-[10px] text-blood-300 flex items-center gap-1.5 animate-pulse-slow">
+                    <span>⚠</span> 悬念风险：可能破坏后续剧情铺垫
+                  </div>
+                )}
+              </div>
+
+              {selectedOldNode && selectedNewNode && (
+                <>
+                  <NodeMetaCompare oldNode={selectedOldNode} newNode={selectedNewNode} />
+
+                  <SectionBlock title="对白文本" field="text">
+                    <CompareBox oldValue={selectedOldNode.text} newValue={selectedNewNode.text} />
+                  </SectionBlock>
+
+                  <SectionBlock title="玩家可见信息" field="visibleInfo">
+                    <CompareList oldValue={selectedOldNode.visibleInfo} newValue={selectedNewNode.visibleInfo} />
+                  </SectionBlock>
+
+                  {(selectedOldNode.choices?.length || selectedNewNode.choices?.length) ? (
+                    <SectionBlock title="选项配置" field="choices">
+                      <ChoiceCompare oldChoices={selectedOldNode.choices ?? []} newChoices={selectedNewNode.choices ?? []} />
+                    </SectionBlock>
+                  ) : null}
+
+                  {(selectedOldNode.conditions || selectedNewNode.conditions) ? (
+                    <SectionBlock title="触发条件" field="conditions">
+                      <CompareBox oldValue={selectedOldNode.conditions ?? ''} newValue={selectedNewNode.conditions ?? ''} mono />
+                    </SectionBlock>
+                  ) : null}
+
+                  <SectionBlock title="情绪数值" field="emotion">
+                    <div className="space-y-2.5">
+                      <EmotionBar label="恐惧 Fear" oldV={selectedOldNode.emotion.fear} newV={selectedNewNode.emotion.fear} color="#c41e1e" />
+                      <EmotionBar label="紧张 Tension" oldV={selectedOldNode.emotion.tension} newV={selectedNewNode.emotion.tension} color="#c9a227" />
+                      <EmotionBar label="信任 Trust" oldV={selectedOldNode.emotion.trust} newV={selectedNewNode.emotion.trust} min={-50} max={50} color="#3a7ca5" />
+                      <EmotionBar label="希望 Hope" oldV={selectedOldNode.emotion.hope} newV={selectedNewNode.emotion.hope} color="#5e8a4a" />
+                    </div>
+                  </SectionBlock>
+                </>
+              )}
+
+              {(!selectedOldNode || !selectedNewNode) && (
+                <div className="gothic-card p-3 text-[11px] text-ghost-700 text-center">
+                  {!selectedOldNode ? '该节点为新增节点，旧版中不存在' : '该节点在新版中已被删除'}
+                </div>
+              )}
+
+              {selectedOldNode && (
+                <button
+                  onClick={() => rollbackNodeDiff(selectedDiff.nodeId)}
+                  className="w-full gothic-btn !py-2 flex items-center justify-center gap-2 text-blood-400 !border-blood-700/50 hover:!bg-blood-900/40"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  将此节点回滚至旧版
+                </button>
+              )}
+            </div>
+          ) : (
+            <div className="flex-1 flex items-center justify-center p-6">
+              <div className="text-center">
+                <div className="text-4xl opacity-20 mb-3">🕯️</div>
+                <p className="text-[11px] text-ghost-900 font-serif tracking-wider leading-relaxed">
+                  点击左侧任意一条变更
+                  <br />查看该节点的完整改动详情
+                </p>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>
   );
 }
 
-function avgEmotion(nodes: any[], key: keyof EmotionProfile) {
+function avgEmotion(nodes: DialogNode[], key: keyof EmotionProfile) {
   if (!nodes.length) return 0;
   return Math.round(nodes.reduce((s, n) => s + (n.emotion?.[key] ?? 0), 0) / nodes.length);
 }
 
-function FearCurve({ oldNodes, newNodes }: { oldNodes: any[]; newNodes: any[] }) {
+function FearCurve({ oldNodes, newNodes }: { oldNodes: DialogNode[]; newNodes: DialogNode[] }) {
   const w = 260;
   const h = 60;
   const dataToPath = (arr: number[]) => {
@@ -183,9 +309,7 @@ function FearCurve({ oldNodes, newNodes }: { oldNodes: any[]; newNodes: any[] })
 
   return (
     <div>
-      <p className="text-[9px] text-ghost-900 mb-1 tracking-wider uppercase">恐惧曲线对比
-
-      </p>
+      <p className="text-[9px] text-ghost-900 mb-1 tracking-wider uppercase">恐惧曲线对比</p>
       <svg width="100%" viewBox={`0 0 ${w} ${h}`} className="overflow-visible">
         <defs>
           <linearGradient id="fear-old" x1="0" x2="0" y1="0" y2="1">
@@ -227,9 +351,6 @@ interface ColProps {
   icon: typeof Eye;
   accent: string;
   diffs: NodeDiff[];
-  allDiffs: NodeDiff[];
-  selected: number | null;
-  onSelect: (i: number | null) => void;
   headerExtra?: React.ReactNode;
 }
 
@@ -238,12 +359,8 @@ function DiffColumn({ title, icon: Icon, accent, diffs, headerExtra }: ColProps)
     <div className="gothic-card p-3 min-h-[160px]">
       <div className="flex items-center gap-2 mb-2">
         <Icon className="w-4 h-4" style={{ color: accent }} />
-        <span className="text-xs font-semibold tracking-wider" style={{ color: accent }}>
-          {title}
-        </span>
-        <span className="ml-auto text-[10px] text-ghost-900 font-mono">
-          {diffs.length} 项
-        </span>
+        <span className="text-xs font-semibold tracking-wider" style={{ color: accent }}>{title}</span>
+        <span className="ml-auto text-[10px] text-ghost-900 font-mono">{diffs.length} 项</span>
       </div>
       <div className="space-y-1.5">
         {diffs.slice(0, 3).map((d) => {
@@ -251,22 +368,18 @@ function DiffColumn({ title, icon: Icon, accent, diffs, headerExtra }: ColProps)
           return (
             <div key={d.nodeId + d.field} className={clsx('p-2 rounded-sm border text-[10px]', sev.bg, sev.border)}>
               <div className="flex items-center gap-1.5 mb-1">
-                <span className={clsx('px-1 rounded-sm font-semibold tracking-wider', sev.color, sev.bg, sev.border, 'border text-[9px]')}>
+                <span className={clsx('px-1 rounded-sm font-semibold tracking-wider border text-[9px]', sev.color, sev.bg, sev.border)}>
                   {sev.label}
                 </span>
                 <span className="font-mono text-ghost-900">{d.nodeId}</span>
-                {d.suspenseRisk && (
-                  <span className="ml-auto text-blood-400 animate-pulse-slow">⚠悬念</span>
-                )}
+                {d.suspenseRisk && <span className="ml-auto text-blood-400 animate-pulse-slow">⚠</span>}
               </div>
               <div className="space-y-0.5 leading-relaxed">
                 <div className="line-through text-ghost-900/80">
-                  <span className="text-blood-700 mr-1">−</span>
-                  {formatValue(d.oldValue).slice(0, 60)}
+                  <span className="text-blood-700 mr-1">−</span>{formatValue(d.oldValue).slice(0, 60)}
                 </div>
                 <div className="text-ghost-500">
-                  <span className="text-moss-500 mr-1">+</span>
-                  {formatValue(d.newValue).slice(0, 60)}
+                  <span className="text-moss-500 mr-1">+</span>{formatValue(d.newValue).slice(0, 60)}
                 </div>
               </div>
             </div>
@@ -293,7 +406,7 @@ function DiffRow({ diff, isSelected, onClick }: RowProps) {
       onClick={onClick}
       className={clsx(
         'gothic-card p-3 cursor-pointer transition-all duration-200',
-        isSelected && 'border-blood-600/70 shadow-glow-red'
+        isSelected && 'border-blood-600/70 shadow-glow-red ring-1 ring-blood-700/40'
       )}
     >
       <div className="flex items-start gap-3">
@@ -304,7 +417,7 @@ function DiffRow({ diff, isSelected, onClick }: RowProps) {
           <span className="font-mono text-[9px] text-ghost-900">{diff.nodeId}</span>
         </div>
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 mb-1.5">
+          <div className="flex items-center gap-2 mb-1.5 flex-wrap">
             <span className="text-xs font-medium text-ghost-500">{diff.description}</span>
             <span className="text-[9px] text-ghost-900 font-mono">字段: {diff.field}</span>
             {diff.suspenseRisk && (
@@ -316,15 +429,144 @@ function DiffRow({ diff, isSelected, onClick }: RowProps) {
           <div className="grid grid-cols-2 gap-2">
             <div className="p-2 rounded-sm bg-blood-900/15 border border-blood-800/30">
               <p className="text-[9px] text-blood-500 tracking-wider mb-1 uppercase">旧版 (删除)</p>
-              <p className="text-xs line-through text-ghost-900/80 leading-relaxed">{formatValue(diff.oldValue)}</p>
+              <p className="text-xs line-through text-ghost-900/80 leading-relaxed break-words">
+                {formatValue(diff.oldValue)}
+              </p>
             </div>
             <div className="p-2 rounded-sm bg-moss-800/20 border border-moss-700/40">
               <p className="text-[9px] text-moss-500 tracking-wider mb-1 uppercase">新版 (新增)</p>
-              <p className="text-xs text-ghost-500 leading-relaxed">{formatValue(diff.newValue)}</p>
+              <p className="text-xs text-ghost-500 leading-relaxed break-words">{formatValue(diff.newValue)}</p>
             </div>
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+function SectionBlock({ title, field, children }: { title: string; field: string; children: React.ReactNode; }) {
+  return (
+    <div className="gothic-card p-3">
+      <p className="text-[10px] text-ghost-900 tracking-widest uppercase mb-2 flex items-center gap-1.5">
+        <span className="w-1 h-1 rounded-full bg-blood-600 inline-block" />
+        {title}
+        <span className="font-mono text-ghost-900/60 normal-case tracking-normal">({field})</span>
+      </p>
+      {children}
+    </div>
+  );
+}
+
+function NodeMetaCompare({ oldNode, newNode }: { oldNode: DialogNode; newNode: DialogNode }) {
+  return (
+    <div className="gothic-card p-3">
+      <p className="text-[10px] text-ghost-900 tracking-widest uppercase mb-2">节点元信息</p>
+      <div className="grid grid-cols-2 gap-2 text-[10px]">
+        <div>
+          <p className="text-blood-600 mb-0.5">旧版 · 说话者</p>
+          <p className="text-ghost-700 flex items-center gap-1"><User className="w-2.5 h-2.5" /> {oldNode.speaker}</p>
+          <p className="text-ghost-900 mt-1">类型: <span className="text-ghost-700">{oldNode.type}</span></p>
+        </div>
+        <div>
+          <p className="text-moss-500 mb-0.5">新版 · 说话者</p>
+          <p className="text-ghost-500 flex items-center gap-1"><User className="w-2.5 h-2.5" /> {newNode.speaker}</p>
+          <p className="text-ghost-900 mt-1">类型: <span className="text-ghost-500">{newNode.type}</span></p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CompareBox({ oldValue, newValue, mono }: { oldValue: string; newValue: string; mono?: boolean }) {
+  const diff = oldValue !== newValue;
+  return (
+    <div className="grid grid-cols-2 gap-2">
+      <div className={clsx('p-2 rounded-sm text-[11px] leading-relaxed break-words', diff ? 'bg-blood-900/15 border border-blood-800/30' : 'bg-abyss-900/40 border border-abyss-700/40')}>
+        <p className={clsx('text-[9px] mb-1 uppercase tracking-wider', diff ? 'text-blood-500' : 'text-ghost-900')}>旧版</p>
+        <p className={clsx(diff ? 'line-through text-ghost-900/80' : 'text-ghost-700', mono && 'font-mono text-[10px]')}>
+          {oldValue || '—'}
+        </p>
+      </div>
+      <div className={clsx('p-2 rounded-sm text-[11px] leading-relaxed break-words', diff ? 'bg-moss-800/20 border border-moss-700/40' : 'bg-abyss-900/40 border border-abyss-700/40')}>
+        <p className={clsx('text-[9px] mb-1 uppercase tracking-wider', diff ? 'text-moss-500' : 'text-ghost-900')}>新版</p>
+        <p className={clsx(diff ? 'text-ghost-500' : 'text-ghost-700', mono && 'font-mono text-[10px]')}>
+          {newValue || '—'}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function CompareList({ oldValue, newValue }: { oldValue: string[]; newValue: string[] }) {
+  const all = Array.from(new Set([...oldValue, ...newValue]));
+  return (
+    <div className="space-y-1">
+      {all.length === 0 && <p className="text-[10px] text-ghost-900">（无可见信息）</p>}
+      {all.map((item, i) => {
+        const inOld = oldValue.includes(item);
+        const inNew = newValue.includes(item);
+        const added = !inOld && inNew;
+        const removed = inOld && !inNew;
+        return (
+          <div
+            key={i}
+            className={clsx(
+              'px-2 py-1.5 rounded-sm text-[11px] flex items-center gap-1.5',
+              added && 'bg-moss-800/30 border border-moss-700/40 text-moss-400',
+              removed && 'bg-blood-900/25 border border-blood-800/40 text-blood-400 line-through',
+              !added && !removed && 'bg-abyss-900/40 border border-abyss-700/40 text-ghost-700'
+            )}
+          >
+            {added ? <span className="text-moss-400 font-bold">+</span> : removed ? <span className="text-blood-500 font-bold">−</span> : <span className="text-ghost-900">·</span>}
+            {item}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function ChoiceCompare({ oldChoices, newChoices }: { oldChoices: any[]; newChoices: any[] }) {
+  const max = Math.max(oldChoices.length, newChoices.length, 1);
+  return (
+    <div className="space-y-2">
+      {Array.from({ length: max }).map((_, i) => {
+        const oc = oldChoices[i];
+        const nc = newChoices[i];
+        return (
+          <div key={i} className="border border-abyss-700/50 rounded-sm overflow-hidden">
+            <div className="px-2 py-1 bg-abyss-700/30 text-[9px] text-ghost-700 tracking-widest uppercase border-b border-abyss-700/40">
+              选项 {i + 1}
+            </div>
+            <div className="grid grid-cols-2 gap-0">
+              <div className="p-2 text-[10px] border-r border-abyss-700/40 bg-blood-900/10">
+                <p className="text-[9px] text-blood-500 mb-0.5 uppercase tracking-wider">旧版</p>
+                {oc ? (
+                  <>
+                    <p className="text-ghost-700 leading-snug">{oc.label}</p>
+                    {oc.reaction && <p className="text-ghost-900 mt-1 text-[9px] italic">反应: {oc.reaction}</p>}
+                    <p className="text-ghost-900 mt-0.5 text-[9px] font-mono">权重: {oc.weight ?? 1}</p>
+                  </>
+                ) : (
+                  <p className="text-blood-500 text-[10px]">（此项为新版新增）</p>
+                )}
+              </div>
+              <div className="p-2 text-[10px] bg-moss-800/15">
+                <p className="text-[9px] text-moss-500 mb-0.5 uppercase tracking-wider">新版</p>
+                {nc ? (
+                  <>
+                    <p className="text-ghost-500 leading-snug">{nc.label}</p>
+                    {nc.reaction && <p className="text-ghost-700 mt-1 text-[9px] italic">反应: {nc.reaction}</p>}
+                    <p className="text-ghost-900 mt-0.5 text-[9px] font-mono">权重: {nc.weight ?? 1}</p>
+                  </>
+                ) : (
+                  <p className="text-blood-400 text-[10px]">（此项在新版中被删除）</p>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }

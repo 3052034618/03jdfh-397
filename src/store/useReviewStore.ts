@@ -87,7 +87,8 @@ export const useReviewStore = create<ReviewState>()(
         return newTodo;
       },
 
-      updateTodoStatus: (id, status) =>
+      updateTodoStatus: (id, status) => {
+        const todo = get().todos.find((t) => t.id === id);
         set((s) => ({
           todos: s.todos.map((t) =>
             t.id === id
@@ -101,14 +102,53 @@ export const useReviewStore = create<ReviewState>()(
                 }
               : t
           ),
-        })),
+        }));
+        // 推进到处理中自动记录 edit 阶段；推进到已解决自动记录 release 阶段
+        if (todo) {
+          const feedbackIds = todo.feedbackIds;
+          if (status === 'processing') {
+            feedbackIds.forEach((fid) => {
+              get().addTrace({
+                feedbackId: fid,
+                todoId: todo.id,
+                nodeId: todo.relatedNodeId,
+                stage: 'edit',
+              });
+            });
+          }
+          if (status === 'resolved') {
+            feedbackIds.forEach((fid) => {
+              get().addTrace({
+                feedbackId: fid,
+                todoId: todo.id,
+                nodeId: todo.relatedNodeId,
+                versionId: todo.resolvedVersion,
+                stage: 'release',
+              });
+            });
+          }
+        }
+      },
 
-      linkTodoToNode: (todoId, nodeId) =>
+      linkTodoToNode: (todoId, nodeId) => {
+        const todo = get().todos.find((t) => t.id === todoId);
         set((s) => ({
           todos: s.todos.map((t) =>
             t.id === todoId ? { ...t, relatedNodeId: nodeId } : t
           ),
-        })),
+        }));
+        // 关联节点时，如果待办已有反馈自动补一条 edit trace
+        if (todo && todo.status !== 'pending') {
+          todo.feedbackIds.forEach((fid) => {
+            get().addTrace({
+              feedbackId: fid,
+              todoId,
+              nodeId,
+              stage: 'edit',
+            });
+          });
+        }
+      },
 
       addTrace: (link) => {
         const newLink: TraceLink = {
