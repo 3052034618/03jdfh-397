@@ -1,6 +1,8 @@
-import { TrendingUp, TrendingDown, Minus, Eye, Heart, Zap, RotateCcw, ChevronRight, User } from 'lucide-react';
+import { useState } from 'react';
+import { TrendingUp, TrendingDown, Minus, Eye, Heart, Zap, RotateCcw, ChevronRight, User, CheckSquare, Square, ListTodo, Send, Save } from 'lucide-react';
 import { clsx } from 'clsx';
 import { useDiffStore } from '../../store/useDiffStore';
+import { useReviewStore } from '../../store/useReviewStore';
 import type { NodeDiff, DiffSeverity, EmotionProfile, DialogNode } from '../../types';
 
 const severityStyle: Record<DiffSeverity, { label: string; color: string; bg: string; border: string; }> = {
@@ -67,7 +69,19 @@ export function DiffViewer() {
     selectedDiffIndex,
     setSelectedDiffIndex,
     rollbackNodeDiff,
+    rollbackDiffKeys,
+    toggleRollbackItem,
+    clearRollbackPlan,
+    selectAllRollback,
+    executeRollbackPlan,
+    saveRollbackPlan,
+    isInRollbackPlan,
   } = useDiffStore();
+  const { createTodoFromFeedback } = useReviewStore();
+  const [showPlanPanel, setShowPlanPanel] = useState(false);
+  const [planName, setPlanName] = useState('');
+  const [planNote, setPlanNote] = useState('');
+  const [showTodoModal, setShowTodoModal] = useState(false);
 
   if (!diffReport) {
     const hint =
@@ -95,7 +109,7 @@ export function DiffViewer() {
   const selectedNewNode = selectedDiff ? newVersion.nodes.find((n) => n.id === selectedDiff.nodeId) : undefined;
 
   return (
-    <div className="flex-1 min-h-0 flex flex-col">
+    <div className="flex-1 min-h-0 flex flex-col relative">
       <div className="border-b border-abyss-700/60 p-4">
         <div className="grid grid-cols-3 gap-6">
           <DiffColumn
@@ -157,17 +171,28 @@ export function DiffViewer() {
 
       <div className="flex-1 min-h-0 flex overflow-hidden">
         <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin p-4 border-r border-abyss-700/60">
-          <h3 className="section-title flex items-center gap-2">
-            <span>所有变更列表</span>
-            <span className="text-[10px] text-ghost-900 font-sans font-normal normal-case tracking-normal ml-1">
-              （{nodeDiffs.length} 项）
-            </span>
-            {selectedDiff && (
-              <span className="ml-auto text-[10px] text-amber-400">
-                已选中 {selectedDiff.nodeId} · {selectedDiff.field}
+          <div className="flex items-center justify-between gap-2 mb-3">
+            <h3 className="section-title flex items-center gap-2 !mb-0 !border-b-0 !pb-0">
+              <span>所有变更列表</span>
+              <span className="text-[10px] text-ghost-900 font-sans font-normal normal-case tracking-normal ml-1">
+                （{nodeDiffs.length} 项）
               </span>
-            )}
-          </h3>
+            </h3>
+            <div className="flex items-center gap-1 text-[9px]">
+              <button
+                onClick={() => selectAllRollback(['high', 'critical'])}
+                className="px-2 py-1 rounded-sm border border-blood-700/50 text-blood-400 hover:bg-blood-900/30 transition-colors"
+              >
+                全选高风险
+              </button>
+              <button
+                onClick={clearRollbackPlan}
+                className="px-2 py-1 rounded-sm border border-abyss-600/60 text-ghost-900 hover:bg-abyss-700/40 transition-colors"
+              >
+                清空
+              </button>
+            </div>
+          </div>
           <div className="space-y-2">
             {nodeDiffs.map((diff, idx) => (
               <DiffRow
@@ -175,7 +200,9 @@ export function DiffViewer() {
                 diff={diff}
                 index={idx}
                 isSelected={selectedDiffIndex === idx}
+                isChecked={isInRollbackPlan(diff.nodeId, diff.field)}
                 onClick={() => setSelectedDiffIndex(idx)}
+                onCheck={() => toggleRollbackItem(diff.nodeId, diff.field)}
               />
             ))}
           </div>
@@ -281,6 +308,154 @@ export function DiffViewer() {
           )}
         </div>
       </div>
+
+      {/* 底部回滚计划栏 */}
+      {rollbackDiffKeys.length > 0 && (
+        <div className="border-t border-abyss-700/60 bg-abyss-900/90 backdrop-blur-sm p-3 flex items-center gap-3">
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 rounded-sm bg-amber-800/40 border border-amber-700/60 flex items-center justify-center">
+              <ListTodo className="w-4 h-4 text-amber-400" />
+            </div>
+            <div>
+              <div className="text-xs text-ghost-500 font-medium">
+                回滚计划 · 已选 {rollbackDiffKeys.length} 项
+              </div>
+              <div className="text-[10px] text-ghost-900">
+                {new Set(rollbackDiffKeys.map((k) => k.split('|')[0])).size} 个节点
+              </div>
+            </div>
+          </div>
+
+          <div className="flex-1" />
+
+          <button
+            onClick={() => setShowPlanPanel(!showPlanPanel)}
+            className="gothic-btn !py-1.5 !px-3 !text-xs"
+          >
+            查看清单
+          </button>
+          <button
+            onClick={() => {
+              const stamp = new Date().toLocaleString('zh-CN').slice(0, 16);
+              const name = `回滚计划 ${stamp}`;
+              saveRollbackPlan(name, `从差异报告生成，${rollbackDiffKeys.length} 项变更`);
+              setShowPlanPanel(false);
+            }}
+            className="gothic-btn-amber !py-1.5 !px-3 !text-xs flex items-center gap-1.5"
+          >
+            保存计划
+          </button>
+          <button
+            onClick={() => setShowTodoModal(true)}
+            className="gothic-btn-primary !py-1.5 !px-3 !text-xs flex items-center gap-1.5"
+          >
+            <Send className="w-3 h-3" />
+            生成复盘待办
+          </button>
+          <button
+            onClick={() => {
+              if (confirm(`确认将选中的 ${rollbackDiffKeys.length} 项变更回滚到旧版？`)) {
+                executeRollbackPlan();
+              }
+            }}
+            className="!py-1.5 !px-3 !text-xs flex items-center gap-1.5 bg-blood-900/50 border border-blood-700/60 text-blood-400 hover:bg-blood-900/70 rounded-sm transition-colors font-semibold tracking-wider"
+          >
+            <RotateCcw className="w-3 h-3" />
+            执行回滚
+          </button>
+        </div>
+      )}
+
+      {/* 回滚计划清单抽屉 */}
+      {showPlanPanel && rollbackDiffKeys.length > 0 && diffReport && (
+        <div className="absolute bottom-16 left-4 right-4 max-h-80 z-10 gothic-card p-4 overflow-y-auto scrollbar-thin">
+          <div className="flex items-center gap-2 mb-3">
+            <h3 className="text-xs font-serif font-semibold text-ghost-500 tracking-wider">回滚清单预览</h3>
+            <button
+              onClick={() => setShowPlanPanel(false)}
+              className="ml-auto text-ghost-900 hover:text-blood-400 text-xs"
+            >
+              关闭 ✕
+            </button>
+          </div>
+          <div className="space-y-1.5">
+            {diffReport.nodeDiffs
+              .filter((d) => isInRollbackPlan(d.nodeId, d.field))
+              .map((diff) => (
+                <div
+                  key={diff.nodeId + diff.field}
+                  className="flex items-center gap-2 p-2 rounded-sm bg-abyss-800/50 border border-abyss-700/50 text-[10px]"
+                >
+                  <span className={`px-1.5 py-0.5 rounded-sm border ${severityStyle[diff.severity].color} ${severityStyle[diff.severity].bg} ${severityStyle[diff.severity].border}`}>
+                    {severityStyle[diff.severity].label}
+                  </span>
+                  <span className="font-mono text-ghost-700">{diff.nodeId}</span>
+                  <span className="text-ghost-500 flex-1 truncate">{diff.description}</span>
+                  <span className="text-ghost-900 font-mono">{diff.field}</span>
+                </div>
+              ))}
+          </div>
+        </div>
+      )}
+
+      {/* 生成复盘待办弹窗 */}
+      {showTodoModal && diffReport && (
+        <div className="absolute inset-0 bg-abyss-950/80 backdrop-blur-sm flex items-center justify-center z-50">
+          <div className="gothic-card p-5 w-full max-w-md">
+            <h3 className="text-sm font-serif font-semibold text-ghost-500 tracking-wider mb-3">
+              生成复盘待办
+            </h3>
+            <p className="text-[11px] text-ghost-900 mb-3">
+              将选中的 {rollbackDiffKeys.length} 项变更整理为一条复盘待办，推送到社区复盘页。
+            </p>
+            <div className="space-y-2 mb-4">
+              <div>
+                <label className="gothic-label">待办标题</label>
+                <input
+                  value={planName || `热修回滚 · ${diffReport.oldVersion.name} → ${diffReport.newVersion.name}`}
+                  onChange={(e) => setPlanName(e.target.value)}
+                  className="gothic-input !py-1.5 !text-xs w-full"
+                />
+              </div>
+              <div>
+                <label className="gothic-label">备注说明</label>
+                <textarea
+                  value={planNote}
+                  onChange={(e) => setPlanNote(e.target.value)}
+                  rows={3}
+                  className="gothic-input !py-1.5 !text-xs w-full resize-none"
+                  placeholder="选填：回滚原因、风险说明等"
+                />
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setShowTodoModal(false)}
+                className="gothic-btn flex-1 !py-1.5 !text-xs"
+              >
+                取消
+              </button>
+              <button
+                onClick={() => {
+                  const nodeIds = new Set(rollbackDiffKeys.map((k) => k.split('|')[0]));
+                  createTodoFromFeedback(
+                    [],
+                    planName || `热修回滚 · ${diffReport.oldVersion.name} → ${diffReport.newVersion.name}`,
+                    planNote || `回滚 ${rollbackDiffKeys.length} 项变更，涉及 ${nodeIds.size} 个节点`,
+                    'high',
+                    '当前用户',
+                    Array.from(nodeIds)[0]
+                  );
+                  setShowTodoModal(false);
+                }}
+                className="gothic-btn-primary flex-1 !py-1.5 !text-xs"
+              >
+                确认生成
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -396,27 +571,42 @@ interface RowProps {
   diff: NodeDiff;
   index: number;
   isSelected: boolean;
+  isChecked: boolean;
   onClick: () => void;
+  onCheck: () => void;
 }
 
-function DiffRow({ diff, isSelected, onClick }: RowProps) {
+function DiffRow({ diff, isSelected, isChecked, onClick, onCheck }: RowProps) {
   const sev = severityStyle[diff.severity];
   return (
     <div
-      onClick={onClick}
       className={clsx(
         'gothic-card p-3 cursor-pointer transition-all duration-200',
-        isSelected && 'border-blood-600/70 shadow-glow-red ring-1 ring-blood-700/40'
+        isSelected && 'border-blood-600/70 shadow-glow-red ring-1 ring-blood-700/40',
+        isChecked && 'ring-2 ring-amber-500/60'
       )}
     >
       <div className="flex items-start gap-3">
-        <div className="flex flex-col items-center gap-1 pt-0.5">
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onCheck();
+          }}
+          className="shrink-0 mt-0.5 text-ghost-700 hover:text-amber-400 transition-colors"
+        >
+          {isChecked ? (
+            <CheckSquare className="w-4 h-4 text-amber-400" />
+          ) : (
+            <Square className="w-4 h-4" />
+          )}
+        </button>
+        <div className="flex flex-col items-center gap-1 pt-0.5 shrink-0">
           <span className={clsx('px-2 py-0.5 text-[9px] font-bold tracking-wider rounded-sm border', sev.color, sev.bg, sev.border)}>
             {sev.label}风险
           </span>
           <span className="font-mono text-[9px] text-ghost-900">{diff.nodeId}</span>
         </div>
-        <div className="flex-1 min-w-0">
+        <div className="flex-1 min-w-0" onClick={onClick}>
           <div className="flex items-center gap-2 mb-1.5 flex-wrap">
             <span className="text-xs font-medium text-ghost-500">{diff.description}</span>
             <span className="text-[9px] text-ghost-900 font-mono">字段: {diff.field}</span>

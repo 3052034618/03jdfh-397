@@ -6,6 +6,8 @@ import type {
   NodeDiff,
   EmotionProfile,
   DialogNode,
+  VersionStatus,
+  RollbackPlan,
 } from '../types';
 import { versions as mockVersions } from '../data/versions';
 
@@ -196,11 +198,14 @@ interface DiffState {
   diffReport: DiffReport | null;
   selectedDiffIndex: number | null;
   compareStatus: VersionCompareStatus;
+  rollbackDiffKeys: string[];
+  rollbackPlans: RollbackPlan[];
 
   selectOldVersion: (id: string | null) => void;
   selectNewVersion: (id: string | null) => void;
   setSelectedDiffIndex: (idx: number | null) => void;
   computeDiff: () => void;
+  getVersionById: (id: string) => VersionSnapshot | undefined;
 
   /** 从对白树管理页保存当前章节的节点快照为热修草稿版本 */
   saveHotfixDraftFromNodes: (
@@ -212,6 +217,22 @@ interface DiffState {
 
   /** 把指定版本中某节点的改动回滚到旧版对应节点 */
   rollbackNodeDiff: (nodeId: string) => void;
+
+  // ========== 回滚计划 ==========
+  toggleRollbackItem: (nodeId: string, field: string) => void;
+  clearRollbackPlan: () => void;
+  selectAllRollback: (severityFilter?: ('high' | 'critical')[]) => void;
+  executeRollbackPlan: () => string[];
+  saveRollbackPlan: (name: string, note?: string) => string;
+  isInRollbackPlan: (nodeId: string, field: string) => boolean;
+
+  // ========== 版本状态流转 ==========
+  updateVersionStatus: (versionId: string, status: VersionStatus, note?: string) => void;
+  promoteDraftToPending: (versionId: string) => void;
+  publishVersion: (versionId: string) => void;
+
+  // ========== 关联待办 ==========
+  linkTodoToVersion: (versionId: string, todoId: string) => void;
 }
 
 export const useDiffStore = create<DiffState>()(
@@ -223,16 +244,20 @@ export const useDiffStore = create<DiffState>()(
       diffReport: null,
       selectedDiffIndex: null,
       compareStatus: 'ok',
+      rollbackDiffKeys: [],
+      rollbackPlans: [],
 
       selectOldVersion: (id) => {
-        set({ oldVersionId: id, selectedDiffIndex: null });
+        set({ oldVersionId: id, selectedDiffIndex: null, rollbackDiffKeys: [] });
         get().computeDiff();
       },
       selectNewVersion: (id) => {
-        set({ newVersionId: id, selectedDiffIndex: null });
+        set({ newVersionId: id, selectedDiffIndex: null, rollbackDiffKeys: [] });
         get().computeDiff();
       },
       setSelectedDiffIndex: (idx) => set({ selectedDiffIndex: idx }),
+
+      getVersionById: (id) => get().versions.find((v) => v.id === id),
 
       computeDiff: () => {
         const { oldVersionId, newVersionId, versions } = get();
@@ -264,22 +289,27 @@ export const useDiffStore = create<DiffState>()(
 
       saveHotfixDraftFromNodes: (name, description, chapterId, chapterNodes) => {
         const newId = `ver-${Date.now()}`;
+        const stamp = new Date();
+        const verCode = `draft-${stamp.getFullYear()}${String(stamp.getMonth() + 1).padStart(2, '0')}${String(stamp.getDate()).padStart(2, '0')}-${String(stamp.getHours()).padStart(2, '0')}${String(stamp.getMinutes()).padStart(2, '0')}`;
         const newVersion: VersionSnapshot = {
           id: newId,
           name,
-          createdAt: new Date().toLocaleString('zh-CN'),
+          versionCode: verCode,
+          status: 'draft',
+          createdAt: stamp.toLocaleString('zh-CN'),
           createdBy: '当前用户',
           chapterId,
           nodes: JSON.parse(JSON.stringify(chapterNodes)),
           tags: ['草稿', '热修'],
           description,
+          relatedTodoIds: [],
         };
         set((s) => ({ versions: [...s.versions, newVersion] }));
         return newId;
       },
 
       rollbackNodeDiff: (nodeId) => {
-        const { diffReport, versions, selectNewVersion, newVersionId } = get();
+        const { diffReport, versions, newVersionId } = get();
         if (!diffReport || !newVersionId) return;
         const oldNode = diffReport.oldVersion.nodes.find((n) => n.id === nodeId);
         if (!oldNode) return;
@@ -295,7 +325,6 @@ export const useDiffStore = create<DiffState>()(
               : v
           ),
         }));
-        // 重新触发差异计算
         const freshVersions = get().versions;
         const oldV = freshVersions.find((v) => v.id === diffReport.oldVersion.id);
         const newV = freshVersions.find((v) => v.id === newVersionId);
@@ -303,6 +332,121 @@ export const useDiffStore = create<DiffState>()(
           set({ diffReport: buildDiffReport(oldV, newV) });
         }
       },
+
+      // ========== 回滚计划 ==========
+      isInRollbackPlan: (nodeId, field) =>
+        get().rollbackDiffKeys.includes(`${nodeId}|${field}`),
+
+      toggleRollbackItem: (nodeId, field) => {
+        const key = `${nodeId}|${field}`;
+        set((s) => ({
+          rollbackDiffKeys: s.rollbackDiffKeys.includes(key)
+            ? s.rollbackDiffKeys.filter((k) => k !== key)
+            : [...s.rollbackDiffKeys, key],
+        }));
+      },
+
+      clearRollbackPlan: () => set({ rollbackDiffKeys: [] }),
+
+      selectAllRollback: (severityFilter) => {
+        const { diffReport } = get();
+        if (!diffReport) return;
+        let target = diffReport.nodeDiffs;
+        if (severityFilter && severityFilter.length > 0) {
+          target = target.filter((d) => severityFilter.includes(d.severity as any));
+        }
+        set({ rollbackDiffKeys: target.map((d) => `${d.nodeId}|${d.field}`) });
+      },
+
+      executeRollbackPlan: () => {
+        const { diffReport, versions, newVersionId, rollbackDiffKeys } = get();
+        if (!diffReport || !newVersionId || rollbackDiffKeys.length === 0) return [];
+        const nodeIds = new Set(rollbackDiffKeys.map((k) => k.split('|')[0]));
+        const oldNodes = diffReport.oldVersion.nodes;
+        const oldMap = new Map(oldNodes.map((n) => [n.id, n]));
+
+        set((s) => ({
+          versions: s.versions.map((v) =>
+            v.id === newVersionId
+              ? {
+                  ...v,
+                  nodes: v.nodes.map((n) =>
+                    nodeIds.has(n.id) && oldMap.has(n.id)
+                      ? JSON.parse(JSON.stringify(oldMap.get(n.id)))
+                      : n
+                  ),
+                }
+              : v
+          ),
+          rollbackDiffKeys: [],
+        }));
+
+        const freshVersions = get().versions;
+        const oldV = freshVersions.find((v) => v.id === diffReport.oldVersion.id);
+        const newV = freshVersions.find((v) => v.id === newVersionId);
+        if (oldV && newV) {
+          set({ diffReport: buildDiffReport(oldV, newV) });
+        }
+        return Array.from(nodeIds);
+      },
+
+      saveRollbackPlan: (name, note) => {
+        const { oldVersionId, newVersionId, diffReport, rollbackDiffKeys } = get();
+        const id = `rbp-${Date.now()}`;
+        const plan: RollbackPlan = {
+          id,
+          name,
+          oldVersionId: oldVersionId ?? '',
+          newVersionId: newVersionId ?? '',
+          chapterId: diffReport?.chapterId ?? '',
+          diffKeys: [...rollbackDiffKeys],
+          createdAt: new Date().toLocaleString('zh-CN'),
+          note,
+        };
+        set((s) => ({ rollbackPlans: [plan, ...s.rollbackPlans] }));
+        return id;
+      },
+
+      // ========== 版本状态流转 ==========
+      updateVersionStatus: (versionId, status, note) =>
+        set((s) => ({
+          versions: s.versions.map((v) =>
+            v.id === versionId
+              ? {
+                  ...v,
+                  status,
+                  reviewNote: note ?? v.reviewNote,
+                  publishTime:
+                    status === 'published'
+                      ? new Date().toLocaleString('zh-CN')
+                      : v.publishTime,
+                }
+              : v
+          ),
+        })),
+
+      promoteDraftToPending: (versionId) => {
+        get().updateVersionStatus(versionId, 'pending-review', '提交审核');
+      },
+
+      publishVersion: (versionId) => {
+        get().updateVersionStatus(versionId, 'published', '审核通过，已发布');
+      },
+
+      // ========== 关联待办 ==========
+      linkTodoToVersion: (versionId, todoId) =>
+        set((s) => ({
+          versions: s.versions.map((v) =>
+            v.id === versionId
+              ? {
+                  ...v,
+                  relatedTodoIds: Array.from(
+                    new Set([...(v.relatedTodoIds ?? []), todoId])
+                  ),
+                }
+              : v
+          ),
+        })),
     }),
     {
       name: 'diff-storage',
@@ -310,6 +454,8 @@ export const useDiffStore = create<DiffState>()(
         versions: s.versions,
         oldVersionId: s.oldVersionId,
         newVersionId: s.newVersionId,
+        rollbackDiffKeys: s.rollbackDiffKeys,
+        rollbackPlans: s.rollbackPlans,
       }),
     }
   )

@@ -9,6 +9,7 @@ import type {
 } from '../types';
 import { feedbacks as defaultFeedbacks } from '../data/feedbacks';
 import { todos as defaultTodos, traces as defaultTraces } from '../data/todos';
+import { useDiffStore } from './useDiffStore';
 
 interface ReviewState {
   feedbacks: PlayerFeedback[];
@@ -33,8 +34,11 @@ interface ReviewState {
     relatedNodeId?: string
   ) => ReviewTodo;
   updateTodoStatus: (id: string, status: TodoStatus) => void;
+  resolveTodoWithVersion: (todoId: string, versionId: string) => void;
   linkTodoToNode: (todoId: string, nodeId: string) => void;
   addTrace: (link: Omit<TraceLink, 'id' | 'timestamp'>) => void;
+  getTracesByFeedback: (feedbackId: string) => TraceLink[];
+  getTracesByTodo: (todoId: string) => TraceLink[];
 }
 
 export const useReviewStore = create<ReviewState>()(
@@ -80,10 +84,10 @@ export const useReviewStore = create<ReviewState>()(
           createdAt: new Date().toLocaleString('zh-CN'),
         };
         set((s) => ({ todos: [newTodo, ...s.todos] }));
-        const relatedFb = get().feedbacks.find((f) => f.id === feedbackIds[0]);
-        if (relatedFb) {
-          get().addTrace({ feedbackId: relatedFb.id, todoId: id, stage: 'todo' });
-        }
+        // 给每条反馈都写 todo 阶段 trace
+        feedbackIds.forEach((fid) => {
+          get().addTrace({ feedbackId: fid, todoId: id, stage: 'todo' });
+        });
         return newTodo;
       },
 
@@ -103,11 +107,10 @@ export const useReviewStore = create<ReviewState>()(
               : t
           ),
         }));
-        // 推进到处理中自动记录 edit 阶段；推进到已解决自动记录 release 阶段
         if (todo) {
-          const feedbackIds = todo.feedbackIds;
+          // 推进到处理中：给每条反馈写 edit 阶段 trace
           if (status === 'processing') {
-            feedbackIds.forEach((fid) => {
+            todo.feedbackIds.forEach((fid) => {
               get().addTrace({
                 feedbackId: fid,
                 todoId: todo.id,
@@ -116,17 +119,45 @@ export const useReviewStore = create<ReviewState>()(
               });
             });
           }
-          if (status === 'resolved') {
-            feedbackIds.forEach((fid) => {
-              get().addTrace({
-                feedbackId: fid,
-                todoId: todo.id,
-                nodeId: todo.relatedNodeId,
-                versionId: todo.resolvedVersion,
-                stage: 'release',
-              });
+        }
+      },
+
+      resolveTodoWithVersion: (todoId, versionId) => {
+        const todo = get().todos.find((t) => t.id === todoId);
+        const version = useDiffStore.getState().getVersionById(versionId);
+        const now = new Date().toLocaleString('zh-CN');
+
+        set((s) => ({
+          todos: s.todos.map((t) =>
+            t.id === todoId
+              ? {
+                  ...t,
+                  status: 'resolved',
+                  resolvedAt: now,
+                  resolvedVersion: version?.name ?? versionId,
+                }
+              : t
+          ),
+        }));
+
+        // 关联版本到待办
+        if (version) {
+          useDiffStore.getState().linkTodoToVersion(versionId, todoId);
+        }
+
+        // 给每条反馈写 release 阶段 trace，带上版本名/号/时间
+        if (todo) {
+          todo.feedbackIds.forEach((fid) => {
+            get().addTrace({
+              feedbackId: fid,
+              todoId,
+              nodeId: todo.relatedNodeId,
+              versionId,
+              versionName: version?.name,
+              versionCode: version?.versionCode,
+              stage: 'release',
             });
-          }
+          });
         }
       },
 
@@ -137,7 +168,7 @@ export const useReviewStore = create<ReviewState>()(
             t.id === todoId ? { ...t, relatedNodeId: nodeId } : t
           ),
         }));
-        // 关联节点时，如果待办已有反馈自动补一条 edit trace
+        // 关联节点时，如果待办非待办状态，给每条反馈补 edit trace
         if (todo && todo.status !== 'pending') {
           todo.feedbackIds.forEach((fid) => {
             get().addTrace({
@@ -158,6 +189,12 @@ export const useReviewStore = create<ReviewState>()(
         };
         set((s) => ({ traces: [...s.traces, newLink] }));
       },
+
+      getTracesByFeedback: (feedbackId) =>
+        get().traces.filter((t) => t.feedbackId === feedbackId),
+
+      getTracesByTodo: (todoId) =>
+        get().traces.filter((t) => t.todoId === todoId),
     }),
     {
       name: 'review-storage',

@@ -80,12 +80,16 @@ export interface ReviewTodo {
 
 export type TraceStage = 'feedback' | 'todo' | 'edit' | 'release';
 
+export type VersionStatus = 'draft' | 'pending-review' | 'published' | 'archived';
+
 export interface TraceLink {
   id: string;
   feedbackId: string;
   todoId?: string;
   nodeId?: string;
   versionId?: string;
+  versionName?: string;
+  versionCode?: string;
   stage: TraceStage;
   timestamp: string;
 }
@@ -93,12 +97,17 @@ export interface TraceLink {
 export interface VersionSnapshot {
   id: string;
   name: string;
+  versionCode: string;
+  status: VersionStatus;
   createdAt: string;
   createdBy: string;
   chapterId: string;
   nodes: DialogNode[];
   tags: string[];
   description: string;
+  publishTime?: string;
+  reviewNote?: string;
+  relatedTodoIds?: string[];
 }
 
 export type DiffType = 'text' | 'emotion' | 'choice' | 'condition' | 'visible_info';
@@ -126,4 +135,15 @@ export interface DiffReport {
     emotionDelta: EmotionProfile;
     suspenseWarnings: string[];
   };
+}
+
+export interface RollbackPlan {
+  id: string;
+  name: string;
+  oldVersionId: string;
+  newVersionId: string;
+  chapterId: string;
+  diffKeys: string[];
+  createdAt: string;
+  note?: string;
 }
